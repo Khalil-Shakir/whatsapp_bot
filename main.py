@@ -4,189 +4,212 @@ import json
 import os
 from neonize.client import NewClient
 from neonize.events import MessageEv, ConnectedEv
-from google import genai
 from groq import Groq
-from database import (get_create_lead, converse_log, update_lead_info, init_db, get_history, save_buyer, save_seller, get_properties, get_property_by_id)
+from database import (
+    get_create_lead,
+    converse_log,
+    update_lead_info,
+    init_db,
+    get_history,
+    save_buyer,
+    save_seller,
+    get_properties,
+    get_property_by_id,
+    get_last_matched_property_id
+)
 
 init_db()
-chatClient = genai.Client()
 groq_client = Groq()
 logging.basicConfig(level=logging.INFO)
 client = NewClient("auth_info.db")
+
+
+def sanitize_intent(raw_intent):
+    """Sanitize raw intent string from LLM to match SQLite CHECK constraint."""
+    if not raw_intent or not isinstance(raw_intent, str):
+        return None
+    clean = raw_intent.strip().upper()
+    if clean in ["BUY", "BUYER", "BUYING", "PURCHASE"]:
+        return "BUY"
+    elif clean in ["SELL", "SELLER", "SELLING"]:
+        return "SELL"
+    elif clean in ["INQUERY", "INQUIRY", "INFO", "QUESTION", "GENERAL"]:
+        return "INQUERY"
+    return None
+
+
+def sanitize_tag(raw_tag):
+    """Sanitize lead_tag string from LLM."""
+    if not raw_tag or not isinstance(raw_tag, str):
+        return None
+    clean = raw_tag.strip().upper()
+    if clean in ["HOT", "WARM", "COLD"]:
+        return clean
+    return None
 
 
 @client.event(ConnectedEv)
 def on_connected(client: NewClient, __: ConnectedEv):
     print("✅ Malik Property Bot Online & Ready!")
 
+
 @client.event(MessageEv)
 def on_message(client: NewClient, message: MessageEv):
-    if message.Info.MessageSource.IsFromMe: return
+    if message.Info.MessageSource.IsFromMe:
+        return
 
     msg_data = message.Message
     text = (
-        msg_data.conversation or msg_data.extendedTextMessage.text or msg_data.imageMessage.caption or msg_data.videoMessage.caption
-        )
+        msg_data.conversation
+        or msg_data.extendedTextMessage.text
+        or msg_data.imageMessage.caption
+        or msg_data.videoMessage.caption
+    )
 
-    if not text: return
+    if not text:
+        return
 
     sender_jid = message.Info.MessageSource.Chat
     print(f"📩 Received text from {sender_jid.User}: {text}")
+
     try:
         lead_id = get_create_lead(sender_jid.User)
         history = get_history(lead_id)
         converse_log(lead_id, "CLIENT", text)
-        # prompt = f"""
-        #         You are the AI Assistant for Malik Property. Answer clients politely and professionally in the same language they use (Urdu/English/Roman Urdu).
-        
-        #         CONVERSATION HISTORY:
-        #         {history}
-        
-        #         CURRENT USER MESSAGE: "{text}"
-        
-        #         INSTRUCTIONS:
-        #         You MUST respond ONLY with a raw JSON object (no markdown, no backticks).
-        #         Return this exact structure:
-        #         {{
-        #         "reply": "Your message back to the client",
-        #         "client_name": "extracted name or null",
-        #         "intent": "BUY or SELL or INQUERY or null",
-        #         "lead_tag": "HOT or WARM or COLD or null",
-        #         "buyer_data": {{
-        #             "preferred_location": "location name or null",
-        #             "property_type": "Plot/House/etc or null",
-        #             "budget_range": "budget or null"
-        #         }},
-        #         "seller_data": {{
-        #             "ownership_type": "fard_e_wahid or khata_shareek or null",
-        #             "land_are": "area size or null",
-        #             "mouza_location": "mouza/village or null",
-        #             "doc_type": "Registry/Inteqal/Stamp or null",
-        #             "asking_price": "price or null"
-        #         }}
-        #         }}
-        #         """
-            
-        # interaction = chatClient.interactions.create(
-        #     model = "gemini-3-flash-preview", input = prompt
-        # )
-
-        
-
-        # output = (interaction.output_text.strip().replace("```json", "").replace("```", ""))
-        # data = json.loads(output)
 
         inventory = get_properties()
-        prompt = f"""<system_instructions>
-You are an expert Real Estate Consultant for Malik Property.
 
-YOUR TASK:
-1. Analyze the conversation history and current message.
-2. Interrogatively extract lead details into JSON.
-3. MATCH & RECOMMEND: Check if any property in <inventory> matches what the user is looking for (budget, location, or land area).
-   - If a good match exists, pitch it enthusiastically in your `reply` to convince the client.
-   - If no direct match exists or client details are incomplete, politely ask 1 missing detail question.
+        prompt = f"""
+You are the AI Assistant for Malik Property. Answer clients politely and professionally in the same language they use (Urdu/English/Roman Urdu).
 
-<inventory>
+AVAILABLE INVENTORY:
 {inventory}
-</inventory>
 
-BEHAVIOR & SALES GUIDELINES:
-- **Language Policy**: Match the user's language (Urdu, Roman Urdu, or English).
-- **Sales Tone**: Highly persuasive, warm, and authoritative. Highlight clear documentation and verified properties.
-- **One Question Rule**: Never ask for more than 1 or 2 missing details at a time.
-
-OUTPUT FORMAT:
-Respond ONLY with a valid JSON payload matching the target schema. No markdown codeblocks (```json).
-</system_instructions>
-
-<conversation_history>
+CONVERSATION HISTORY:
 {history}
-</conversation_history>
 
-<current_user_message>
-{text}
-</current_user_message>
+CURRENT USER MESSAGE: "{text}"
 
-<json_schema>
+INSTRUCTIONS:
+- You MUST respond ONLY with a raw JSON object (no markdown formatting, no code blocks).
+- If you discuss or recommend a specific property from the inventory, include its numeric ID in "matched_property_id".
+- Set "matched_property_id" to null if no specific property is being discussed.
+
+Return this exact JSON structure:
 {{
-  "reply": "Persuasive response pitching a matching property from inventory OR asking for missing requirements.",
-  "client_name": null,
-  "intent": null,
-  "lead_tag": null,
-  "matched_property_id": null,
+  "reply": "Your message back to the client",
+  "client_name": "extracted name or null",
+  "intent": "BUY or SELL or INQUERY or null",
+  "lead_tag": "HOT or WARM or COLD or null",
+  "matched_property_id": integer property ID or null,
   "buyer_data": {{
-    "preferred_location": null,
-    "property_type": null,
-    "budget_range": null
+      "preferred_location": "location name or null",
+      "property_type": "Plot/House/etc or null",
+      "budget_range": "budget or null"
   }},
   "seller_data": {{
-    "ownership_type": null,
-    "land_are": null,
-    "mouza_location": null,
-    "doc_type": null,
-    "asking_price": null
+      "ownership_type": "fard_e_wahid or khata_shareek or null",
+      "land_are": "area size or null",
+      "mouza_location": "mouza/village or null",
+      "doc_type": "Registry/Inteqal/Stamp or null",
+      "asking_price": "price or null"
   }}
 }}
-</json_schema>
+"""
 
-<field_rules>
-- "intent" choices: "BUY", "SELL", "INQUERY", or null
-- "lead_tag" choices: "HOT", "WARM", "COLD", or null
-- Set fields to null if unknown.
-</field_rules>"""
         chat_completion = groq_client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model="llama-3.3-70b-versatile",
-            response_format={"type": "json_object"},  # Enforces valid JSON response
+            temperature=0.2,
+            response_format={"type": "json_object"},
         )
 
         output_text = chat_completion.choices[0].message.content
         data = json.loads(output_text)
 
-        update_lead_info(lead_id, data.get("client_name"), data.get("intent"), data.get("lead_tag"))
-        #save buyer
-        if data.get("intent") == "BUY" and data.get("buyer_data"):
+        # Sanitize intent and tag values
+        clean_intent = sanitize_intent(data.get("intent"))
+        clean_tag = sanitize_tag(data.get("lead_tag"))
+
+        update_lead_info(lead_id, data.get("client_name"), clean_intent, clean_tag)
+
+        # Save buyer data
+        if clean_intent == "BUY" and data.get("buyer_data"):
             buyer_data = data["buyer_data"]
-            save_buyer(lead_id, buyer_data.get("preferred_location"), buyer_data.get("property_type"), buyer_data.get("budget_range"))
-        #save seller
-        if data.get("intent") == "SELL" and data.get("seller_data"):
+            save_buyer(
+                lead_id,
+                buyer_data.get("preferred_location"),
+                buyer_data.get("property_type"),
+                buyer_data.get("budget_range"),
+            )
+
+        # Save seller data
+        if clean_intent == "SELL" and data.get("seller_data"):
             seller = data["seller_data"]
-            save_seller(lead_id, seller.get("ownership_type"), seller.get("land_are"), seller.get("mouza_location"), seller.get("doc_type"), seller.get("asking_price"))
-        
+            save_seller(
+                lead_id,
+                seller.get("ownership_type"),
+                seller.get("land_are"),
+                seller.get("mouza_location"),
+                seller.get("doc_type"),
+                seller.get("asking_price"),
+            )
+
         reply_text = data.get("reply", "Thank you for contacting Malik Property.")
-        matched_id = data.get("matched_property_id")
+
+        # Resolve matched property ID
+        raw_matched_id = data.get("matched_property_id")
+        matched_id = None
+
+        if isinstance(raw_matched_id, int):
+            matched_id = raw_matched_id
+        elif isinstance(raw_matched_id, str) and raw_matched_id.isdigit():
+            matched_id = int(raw_matched_id)
+
+        # Fallback: Check if user is requesting a photo for a property discussed earlier
+        user_wants_image = any(
+            kw in text.lower()
+            for kw in ["pic", "picture", "tasveer", "photo", "dekhao", "bhejo", "image"]
+        )
+        if not matched_id and user_wants_image:
+            matched_id = get_last_matched_property_id(lead_id)
+
         image_sent = False
         if matched_id:
             property_record = get_property_by_id(matched_id)
-            if property_record and property_record["image_url"]:
-                image_path = property_record["image_url"]
-                
-                if os.path.exists(image_path):
-                    # Send WhatsApp Image Message with caption via Neonize
-                    print(f"📸 Sending property image for ID {matched_id} to {message.Info.MessageSource.Chat.User}")
-                    
-                    # Neonize send_image execution:
+
+            if property_record and hasattr(property_record, "__getitem__"):
+                # Handle dictionary/Row access safely
+                image_path = (
+                    property_record["image_url"]
+                    if "image_url" in property_record.keys()
+                    else None
+                )
+
+                if image_path and os.path.exists(image_path):
+                    print(
+                        f"📸 Sending property image for ID {matched_id} to {sender_jid.User}"
+                    )
                     client.send_image(
-                        to=sender_jid,
-                        file=image_path,
-                        caption=reply_text
+                        to=sender_jid, file=image_path, caption=reply_text
                     )
                     image_sent = True
+                else:
+                    if image_path:
+                        print(f"⚠️ Image path '{image_path}' not found on disk.")
 
-        # Fallback to plain text message if no image exists or send image was not applicable
+        # Fallback to plain text message if image couldn't be sent
         if not image_sent:
-            client.send_message(
-                to=sender_jid,
-                message=reply_text
-            )
-            print("No image was shown")
-        # client.reply_message(reply_text, message)
-        converse_log(lead_id, "BOT", reply_text)
-        print(f"Replied to {sender_jid.User}")
+            client.send_message(to=sender_jid, message=reply_text)
+
+        log_entry = f"[ID: {matched_id}] {reply_text}" if matched_id else reply_text
+        converse_log(lead_id, "BOT", log_entry)
+        print(f"✅ Replied to {sender_jid.User}")
 
     except Exception as e:
         print(f"❌ Error during message processing: {e}")
+
+
 if __name__ == "__main__":
     client.connect()
     threading.Event().wait()

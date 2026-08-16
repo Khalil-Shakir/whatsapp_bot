@@ -1,4 +1,5 @@
 import sqlite3
+import re
 from datetime import datetime
 
 DB_NAME = "leads.db"
@@ -7,6 +8,8 @@ DB_NAME = "leads.db"
 def db_connect():
     connect_db = sqlite3.connect(DB_NAME)
     connect_db.row_factory = sqlite3.Row
+    connect_db.execute("PRAGMA journal_mode=WAL;")
+    connect_db.execute("PRAGMA busy_timeout = 30000;")
     return connect_db
 
 
@@ -50,19 +53,19 @@ def init_db():
     )
 
     cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS seller_properties(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                lead_id TEXT UNIQUE NOT NULL,
-                ownership_type TEXT,
-                land_are TEXT,
-                mouza_location TEXT,
-                doc_type TEXT,
-                asking_price TEXT,
-                FOREIGN KEY (lead_id) REFERENCES leads (id) ON DELETE CASCADE
-            )        
-            """
-        )
+        """
+        CREATE TABLE IF NOT EXISTS seller_properties(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            lead_id TEXT UNIQUE NOT NULL,
+            ownership_type TEXT,
+            land_are TEXT,
+            mouza_location TEXT,
+            doc_type TEXT,
+            asking_price TEXT,
+            FOREIGN KEY (lead_id) REFERENCES leads (id) ON DELETE CASCADE
+        )        
+        """
+    )
 
     cursor.execute(
         """
@@ -94,16 +97,16 @@ def init_db():
         CREATE TABLE IF NOT EXISTS properties (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT NOT NULL,
-            property_type TEXT NOT NULL, -- e.g. Plot, House, Agricultural
-            intent_type TEXT NOT NULL,   -- 'FOR_SALE' (bot pitches to buyers) or 'WANTED' (bot matches with sellers)
+            property_type TEXT NOT NULL, 
+            intent_type TEXT NOT NULL,  
             location_mouza TEXT NOT NULL,
             land_area TEXT NOT NULL,
             asking_price REAL NOT NULL,
-            ownership_type TEXT,        -- fard_e_wahid, khata_shareek
-            doc_type TEXT,              -- Registry, Inteqal, Stamp
+            ownership_type TEXT,        
+            doc_type TEXT,            
             description TEXT,
             image_url TEXT,
-            status TEXT DEFAULT 'AVAILABLE', -- 'AVAILABLE', 'SOLD'
+            status TEXT DEFAULT 'AVAILABLE', 
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
@@ -112,16 +115,19 @@ def init_db():
     con.close()
     print("💾 Connection initialized with the leads database")
 
-def converse_log(lead_id: int, sender:str, message_text:str):
+
+def converse_log(lead_id: int, sender: str, message_text: str):
     con = db_connect()
     cursor = con.cursor()
     cursor.execute(
-        "INSERT INTO conversation_logs(lead_id, sender, message_text) VALUES(?,?,?)",(lead_id, sender, message_text)
+        "INSERT INTO conversation_logs(lead_id, sender, message_text) VALUES(?,?,?)",
+        (lead_id, sender, message_text),
     )
     con.commit()
     con.close()
 
-def update_lead_info(lead_id:int, name:str = None, intent:str = None, tag:str = None):
+
+def update_lead_info(lead_id: int, name: str = None, intent: str = None, tag: str = None):
     con = db_connect()
     cursor = con.cursor()
     cursor.execute(
@@ -137,8 +143,9 @@ def update_lead_info(lead_id:int, name:str = None, intent:str = None, tag:str = 
     )
     con.commit()
     con.close()
-#History
-def get_history(lead_id: str, limit: int = 10):
+
+
+def get_history(lead_id: int, limit: int = 10):
     con = db_connect()
     cursor = con.cursor()
     cursor.execute(
@@ -157,51 +164,70 @@ def get_history(lead_id: str, limit: int = 10):
     for row in reversed(rows):
         history.append(f"{row['sender']}: {row['message_text']}")
     return "\n".join(history)
-#get properties
+
+
 def get_properties():
-    """Fetch active inventory to feed into the bot prompt."""
+    """Fetch active inventory with IDs to feed into the bot prompt."""
     conn = db_connect()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT title, property_type, location_mouza, land_area, asking_price, description, image_url 
+        SELECT id, title, property_type, location_mouza, land_area, asking_price, description, image_url 
         FROM properties 
         WHERE status = 'AVAILABLE'
     """)
     rows = cursor.fetchall()
     conn.close()
-    
+
     if not rows:
         return "No inventory currently listed."
-        
+
     formatted_listings = []
     for r in rows:
         has_photo = "Yes" if r["image_url"] else "No"
         formatted_listings.append(
-            f"- {r[0]} | Type: {r[1]} | Location: {r[2]} | Size: {r[3]} | Price: PKR {r[4]:,.0f} | Photo Available: {has_photo} | Details: {r[5]}"
+            f"- [ID: {r['id']}] {r['title']} | Type: {r['property_type']} | Location: {r['location_mouza']} | Size: {r['land_area']} | Price: PKR {r['asking_price']:,.0f} | Photo Available: {has_photo} | Details: {r['description']}"
         )
     return "\n".join(formatted_listings)
-#get single preferences
-def get_property_by_id(property_id):
-    """Retrieves a single property record by ID with dictionary key access."""
+
+
+def get_property_by_id(property_id: int):
+    """Retrieves a single property record from the properties table by its integer ID."""
+    if not property_id:
+        return None
+    try:
+        property_id = int(property_id)
+    except (ValueError, TypeError):
+        return None
+
     conn = db_connect()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM properties WHERE id = ?", (property_id,))
     row = cursor.fetchone()
     conn.close()
-    return row
-def get_property_image_path(property_id):
-    conn = sqlite3.connect("leads.db", timeout=30.0)
+    return row  # sqlite3.Row object allowing key-based indexing (row["image_url"])
+
+
+def get_last_matched_property_id(lead_id: int):
+    """Scans conversation logs to find the most recent property ID discussed with this lead."""
+    conn = db_connect()
     cursor = conn.cursor()
-    cursor.execute("SELECT image_path FROM properties WHERE id = ?", (property_id,))
-    row = cursor.fetchone()
+    cursor.execute("""
+        SELECT message_text FROM conversation_logs 
+        WHERE lead_id = ? AND sender = 'BOT' 
+        ORDER BY timestamp DESC LIMIT 5
+    """, (lead_id,))
+    rows = cursor.fetchall()
     conn.close()
-    
-    # Access via integer index 0
-    if row and row[0]:
-        return row[0]  # Returns the image_path string
+
+    for r in rows:
+        msg_text = r["message_text"]
+        match = re.search(r'\[ID:\s*(\d+)\]', msg_text)
+        if match:
+            return int(match.group(1))
     return None
-#Save buyer preferences
-def save_buyer(lead_id:int, location:str = None, prop_type:str = None, budget:str = None):
+
+
+def save_buyer(lead_id: int, location: str = None, prop_type: str = None, budget: str = None):
     con = db_connect()
     cursor = con.cursor()
     cursor.execute("SELECT id FROM buyer_preferences WHERE lead_id = ?", (lead_id,))
@@ -227,8 +253,9 @@ def save_buyer(lead_id:int, location:str = None, prop_type:str = None, budget:st
         )
     con.commit()
     con.close()
-#Save seller properties
-def save_seller(lead_id:int, ownership:str = None, area:str = None, mouza:str = None, doc_type:str = None, price:str = None):
+
+
+def save_seller(lead_id: int, ownership: str = None, area: str = None, mouza: str = None, doc_type: str = None, price: str = None):
     con = db_connect()
     cursor = con.cursor()
     cursor.execute("SELECT id FROM seller_properties WHERE lead_id = ?", (lead_id,))
@@ -237,7 +264,7 @@ def save_seller(lead_id:int, ownership:str = None, area:str = None, mouza:str = 
         cursor.execute(
             """
             UPDATE seller_properties
-            set ownership_type = COALESCE(?, ownership_type),
+            SET ownership_type = COALESCE(?, ownership_type),
                 land_are = COALESCE(?, land_are),
                 mouza_location = COALESCE(?, mouza_location),
                 doc_type = COALESCE(?, doc_type),
@@ -256,6 +283,7 @@ def save_seller(lead_id:int, ownership:str = None, area:str = None, mouza:str = 
         )
     con.commit()
     con.close()
-    
+
+
 if __name__ == "__main__":
     init_db()
