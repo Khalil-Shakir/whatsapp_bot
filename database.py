@@ -90,6 +90,23 @@ def init_db():
     """
     )
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS properties (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            property_type TEXT NOT NULL, -- e.g. Plot, House, Agricultural
+            intent_type TEXT NOT NULL,   -- 'FOR_SALE' (bot pitches to buyers) or 'WANTED' (bot matches with sellers)
+            location_mouza TEXT NOT NULL,
+            land_area TEXT NOT NULL,
+            asking_price REAL NOT NULL,
+            ownership_type TEXT,        -- fard_e_wahid, khata_shareek
+            doc_type TEXT,              -- Registry, Inteqal, Stamp
+            description TEXT,
+            status TEXT DEFAULT 'AVAILABLE', -- 'AVAILABLE', 'SOLD'
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+
     con.commit()
     con.close()
     print("💾 Connection initialized with the leads database")
@@ -139,6 +156,28 @@ def get_history(lead_id: str, limit: int = 10):
     for row in reversed(rows):
         history.append(f"{row['sender']}: {row['message_text']}")
     return "\n".join(history)
+#get properties
+def get_properties():
+    """Fetch active inventory to feed into the bot prompt."""
+    conn = sqlite3.connect("leads.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT title, property_type, location_mouza, land_area, asking_price, description 
+        FROM properties 
+        WHERE status = 'AVAILABLE'
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    
+    if not rows:
+        return "No inventory currently listed."
+        
+    formatted_listings = []
+    for r in rows:
+        formatted_listings.append(
+            f"- {r[0]} | Type: {r[1]} | Location: {r[2]} | Size: {r[3]} | Price: PKR {r[4]:,.0f} | Details: {r[5]}"
+        )
+    return "\n".join(formatted_listings)
 #Save buyer preferences
 def save_buyer(lead_id:int, location:str = None, prop_type:str = None, budget:str = None):
     con = db_connect()

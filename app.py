@@ -1,12 +1,12 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
-
+from database import init_db
 # -------------------------------------------------------------------
 # DB Connection & Helper Functions
 # -------------------------------------------------------------------
 DB_PATH = "leads.db"
-
+init_db()
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -33,6 +33,61 @@ def load_leads():
     finally:
         conn.close()
     return df
+
+def get_db_connection():
+    return sqlite3.connect(DB_PATH)
+
+# Add navigation tabs to your dashboard
+tab1, tab2 = st.tabs(["📋 Lead Tracking", "🏠 Inventory & Listings"])
+
+with tab1:
+    st.subheader("Captured Leads")
+    # ... (Your existing lead management code)
+
+with tab2:
+    st.subheader("➕ Add New Inventory / Property")
+    
+    with st.form("add_property_form", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            title = st.text_input("Listing Title", placeholder="e.g. 10 Marla Plot near Main Bazar")
+            property_type = st.selectbox("Property Type", ["Plot", "Residential House", "Commercial", "Agricultural Land"])
+            intent_type = st.selectbox("Listing Purpose", ["FOR_SALE", "WANTED"])
+            location_mouza = st.text_input("Mouza / Location", placeholder="e.g. Mouza Wandhi, Mianwali")
+            land_area = st.text_input("Land Area", placeholder="e.g. 10 Marla / 2 Kanal")
+            
+        with col2:
+            asking_price = st.number_input("Demand / Price (PKR)", min_value=0.0, step=50000.0)
+            ownership_type = st.selectbox("Ownership Type", ["fard_e_wahid", "khata_shareek", "Unknown"])
+            doc_type = st.selectbox("Document Type", ["Registry", "Inteqal", "Stamp", "Unknown"])
+            description = st.text_area("Key Details / Highlights", placeholder="Mention features, road width, urgency, etc.")
+            
+        submitted = st.form_submit_button("🚀 Publish Property")
+        
+        if submitted:
+            if title and location_mouza:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO properties 
+                    (title, property_type, intent_type, location_mouza, land_area, asking_price, ownership_type, doc_type, description)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (title, property_type, intent_type, location_mouza, land_area, asking_price, ownership_type, doc_type, description))
+                conn.commit()
+                conn.close()
+                st.success(f"Property '{title}' added to active inventory!")
+            else:
+                st.error("Please fill in the required fields (Title & Location).")
+
+    st.divider()
+    st.subheader("📦 Current Active Inventory")
+    
+    conn = get_db_connection()
+    properties_df = pd.read_sql_query("SELECT * FROM properties WHERE status='AVAILABLE' ORDER BY created_at DESC", conn)
+    conn.close()
+    
+    st.dataframe(properties_df, use_container_width=True)
 
 # -------------------------------------------------------------------
 # Page Config & Header
