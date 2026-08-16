@@ -1,11 +1,12 @@
 import logging
 import threading
 import json
+import os
 from neonize.client import NewClient
 from neonize.events import MessageEv, ConnectedEv
 from google import genai
 from groq import Groq
-from database import (get_create_lead, converse_log, update_lead_info, init_db, get_history, save_buyer, save_seller, get_properties)
+from database import (get_create_lead, converse_log, update_lead_info, init_db, get_history, save_buyer, save_seller, get_properties, get_property_by_id)
 
 init_db()
 chatClient = genai.Client()
@@ -154,7 +155,33 @@ Respond ONLY with a valid JSON payload matching the target schema. No markdown c
             save_seller(lead_id, seller.get("ownership_type"), seller.get("land_are"), seller.get("mouza_location"), seller.get("doc_type"), seller.get("asking_price"))
         
         reply_text = data.get("reply", "Thank you for contacting Malik Property.")
-        client.reply_message(reply_text, message)
+        matched_id = data.get("matched_property_id")
+        image_sent = False
+        if matched_id:
+            property_record = get_property_by_id(matched_id)
+            if property_record and property_record["image_url"]:
+                image_path = property_record["image_url"]
+                
+                if os.path.exists(image_path):
+                    # Send WhatsApp Image Message with caption via Neonize
+                    print(f"📸 Sending property image for ID {matched_id} to {message.Info.MessageSource.Chat.User}")
+                    
+                    # Neonize send_image execution:
+                    client.send_image(
+                        to=sender_jid,
+                        file=image_path,
+                        caption=reply_text
+                    )
+                    image_sent = True
+
+        # Fallback to plain text message if no image exists or send image was not applicable
+        if not image_sent:
+            client.send_message(
+                to=sender_jid,
+                message=reply_text
+            )
+            print("No image was shown")
+        # client.reply_message(reply_text, message)
         converse_log(lead_id, "BOT", reply_text)
         print(f"Replied to {sender_jid.User}")
 

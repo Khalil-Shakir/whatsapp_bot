@@ -1,11 +1,14 @@
 import streamlit as st
 import sqlite3
+import os
 import pandas as pd
-from database import init_db
+from database import (init_db)
 # -------------------------------------------------------------------
 # DB Connection & Helper Functions
 # -------------------------------------------------------------------
 DB_PATH = "leads.db"
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 init_db()
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
@@ -62,18 +65,29 @@ with tab2:
             ownership_type = st.selectbox("Ownership Type", ["fard_e_wahid", "khata_shareek", "Unknown"])
             doc_type = st.selectbox("Document Type", ["Registry", "Inteqal", "Stamp", "Unknown"])
             description = st.text_area("Key Details / Highlights", placeholder="Mention features, road width, urgency, etc.")
-            
+
+        uploaded_image = st.file_uploader("📸 Upload Property Photo (JPEG/PNG)", type=["jpg", "jpeg", "png"])
         submitted = st.form_submit_button("🚀 Publish Property")
         
         if submitted:
             if title and location_mouza:
+                saved_image_path = None
+                if uploaded_image is not None:
+                    file_extension = os.path.splitext(uploaded_image.name)[1]
+                    # Unique filename using property title and timestamp
+                    filename = f"prop_{int(pd.Timestamp.now().timestamp())}{file_extension}"
+                    saved_image_path = os.path.join(UPLOAD_DIR, filename)
+                    
+                    with open(saved_image_path, "wb") as f:
+                        f.write(uploaded_image.getbuffer())
+                
                 conn = get_db_connection()
                 cursor = conn.cursor()
                 cursor.execute("""
                     INSERT INTO properties 
-                    (title, property_type, intent_type, location_mouza, land_area, asking_price, ownership_type, doc_type, description)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (title, property_type, intent_type, location_mouza, land_area, asking_price, ownership_type, doc_type, description))
+                    (title, property_type, intent_type, location_mouza, land_area, asking_price, ownership_type, doc_type, description, image_url)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (title, property_type, intent_type, location_mouza, land_area, asking_price, ownership_type, doc_type, description, saved_image_path))
                 conn.commit()
                 conn.close()
                 st.success(f"Property '{title}' added to active inventory!")
@@ -166,7 +180,7 @@ st.dataframe(
         ),
         "intent": st.column_config.SelectboxColumn(
             "Intent",
-            options=["BUY", "SELL", "INQUIRY"],
+            options=["BUY", "SELL", "INQUERY"],
             required=True
         )
     }

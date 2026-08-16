@@ -102,6 +102,7 @@ def init_db():
             ownership_type TEXT,        -- fard_e_wahid, khata_shareek
             doc_type TEXT,              -- Registry, Inteqal, Stamp
             description TEXT,
+            image_url TEXT,
             status TEXT DEFAULT 'AVAILABLE', -- 'AVAILABLE', 'SOLD'
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
@@ -159,10 +160,10 @@ def get_history(lead_id: str, limit: int = 10):
 #get properties
 def get_properties():
     """Fetch active inventory to feed into the bot prompt."""
-    conn = sqlite3.connect("leads.db")
+    conn = db_connect()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT title, property_type, location_mouza, land_area, asking_price, description 
+        SELECT title, property_type, location_mouza, land_area, asking_price, description, image_url 
         FROM properties 
         WHERE status = 'AVAILABLE'
     """)
@@ -174,10 +175,31 @@ def get_properties():
         
     formatted_listings = []
     for r in rows:
+        has_photo = "Yes" if r["image_url"] else "No"
         formatted_listings.append(
-            f"- {r[0]} | Type: {r[1]} | Location: {r[2]} | Size: {r[3]} | Price: PKR {r[4]:,.0f} | Details: {r[5]}"
+            f"- {r[0]} | Type: {r[1]} | Location: {r[2]} | Size: {r[3]} | Price: PKR {r[4]:,.0f} | Photo Available: {has_photo} | Details: {r[5]}"
         )
     return "\n".join(formatted_listings)
+#get single preferences
+def get_property_by_id(property_id):
+    """Retrieves a single property record by ID with dictionary key access."""
+    conn = db_connect()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM properties WHERE id = ?", (property_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row
+def get_property_image_path(property_id):
+    conn = sqlite3.connect("leads.db", timeout=30.0)
+    cursor = conn.cursor()
+    cursor.execute("SELECT image_path FROM properties WHERE id = ?", (property_id,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    # Access via integer index 0
+    if row and row[0]:
+        return row[0]  # Returns the image_path string
+    return None
 #Save buyer preferences
 def save_buyer(lead_id:int, location:str = None, prop_type:str = None, budget:str = None):
     con = db_connect()
