@@ -30,20 +30,20 @@ def load_full_leads():
     query = """
     SELECT 
         l.id AS lead_id,
-        l.client_name,
+        COALESCE(NULLIF(l.client_name, ''), 'Awaiting Name') AS client_name,
         l.phone_number,
         l.intent,
         l.lead_tag,
         -- Buyer Preferences
-        b.preferred_location,
+        b.preferred_location AS buyer_location,
         b.property_type AS buyer_property_type,
-        b.budget_range,
+        b.budget_range AS buyer_budget,
         -- Seller Properties
-        s.ownership_type,
+        s.mouza_location AS seller_mouza,
         s.land_are AS seller_land_area,
-        s.mouza_location,
-        s.doc_type,
-        s.asking_price AS seller_asking_price,
+        s.ownership_type AS seller_ownership,
+        s.doc_type AS seller_doc_type,
+        COALESCE(NULLIF(s.asking_price, ''), 'Dealer Market Estimate Required') AS seller_asking_price,
         l.created_at,
         l.updated_at
     FROM leads l
@@ -68,7 +68,7 @@ def load_conversation_logs():
         c.id AS log_id,
         l.id AS lead_id,
         l.phone_number,
-        COALESCE(l.client_name, 'Unknown') AS client_name,
+        COALESCE(NULLIF(l.client_name, ''), 'Unknown') AS client_name,
         c.sender,
         c.message_text,
         c.timestamp
@@ -115,16 +115,18 @@ with tab1:
         st.warning("No lead data found in leads.db yet.")
     else:
         # Key Performance Indicators (KPIs)
-        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+        kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
         total_leads = len(df)
         hot_leads = len(df[df['lead_tag'] == 'HOT']) if 'lead_tag' in df.columns else 0
         buyer_leads = len(df[df['intent'] == 'BUY']) if 'intent' in df.columns else 0
         seller_leads = len(df[df['intent'] == 'SELL']) if 'intent' in df.columns else 0
+        both_leads = len(df[df['intent'] == 'BOTH']) if 'intent' in df.columns else 0
 
         kpi1.metric("Total Captured Leads", total_leads)
         kpi2.metric("🔥 Hot Leads", hot_leads)
         kpi3.metric("🏠 Buyers", buyer_leads)
         kpi4.metric("🏷️ Sellers", seller_leads)
+        kpi5.metric("🔄 Dual (Buy & Sell)", both_leads)
 
         st.divider()
 
@@ -148,13 +150,16 @@ with tab1:
         if tag_filter and 'lead_tag' in filtered_df.columns:
             filtered_df = filtered_df[filtered_df['lead_tag'].isin(tag_filter)]
 
-        st.subheader("📋 Unified Lead Table (Leads + Buyers + Sellers)")
+        st.subheader("📋 Unified Lead Table (Buyers + Sellers + Dual Interests)")
         st.dataframe(
             filtered_df,
             use_container_width=True,
             column_config={
                 "lead_tag": st.column_config.SelectboxColumn("Lead Status", options=["HOT", "WARM", "COLD"]),
-                "intent": st.column_config.SelectboxColumn("Intent", options=["BUY", "SELL", "INQUERY"])
+                "intent": st.column_config.SelectboxColumn("Intent", options=["BUY", "SELL", "BOTH", "INQUERY"]),
+                "phone_number": st.column_config.TextColumn("Phone Number"),
+                "buyer_budget": st.column_config.TextColumn("Buyer Budget"),
+                "seller_asking_price": st.column_config.TextColumn("Seller Asking Price / Notes")
             }
         )
 
@@ -180,15 +185,14 @@ with tab2:
         # 1. Lead Conversion Funnel
         with col_chart1:
             st.markdown("**🎯 Lead Conversion Funnel**")
-            # Calculate funnel counts dynamically
             tag_counts = df_analytics['lead_tag'].value_counts() if 'lead_tag' in df_analytics.columns else pd.Series()
             
-            funnel_stages = ["New Lead", "Hot Lead", "Site Visit Scheduled", "Closed Deal"]
+            funnel_stages = ["New Lead", "Hot Lead", "Warm Lead", "Cold Lead"]
             funnel_values = [
                 len(df_analytics),
                 tag_counts.get("HOT", 0),
-                tag_counts.get("WARM", 0),  # Mapped WARM as operational proxy
-                tag_counts.get("CLOSED", 0)
+                tag_counts.get("WARM", 0),
+                tag_counts.get("COLD", 0)
             ]
 
             fig_funnel = go.Figure(go.Funnel(
@@ -203,8 +207,7 @@ with tab2:
         # 2. Demand Heatmap / Bar Chart by Mouza
         with col_chart2:
             st.markdown("**📍 Location / Mouza Demand Hotspots**")
-            # Combine preferred location from buyers and seller mouzas
-            mouza_series = df_analytics['preferred_location'].fillna(df_analytics['mouza_location']).dropna()
+            mouza_series = df_analytics['buyer_location'].fillna(df_analytics['seller_mouza']).dropna()
             
             if not mouza_series.empty:
                 mouza_counts = mouza_series.value_counts().reset_index()
@@ -227,30 +230,21 @@ with tab2:
         st.divider()
         col_chart3, col_chart4 = st.columns(2)
 
-        # 3. Budget vs. Asking Price Scatter Plot
+        # 3. Intent Distribution
         with col_chart3:
-            st.markdown("**💰 Buyer Budget vs. Seller Asking Price**")
-            
-            # Clean numerical fields
-            df_analytics['budget_num'] = pd.to_numeric(df_analytics['budget_range'], errors='coerce')
-            df_analytics['asking_num'] = pd.to_numeric(df_analytics['seller_asking_price'], errors='coerce')
-
-            plot_df = df_analytics.dropna(subset=['budget_num', 'asking_num'], how='all')
-
-            if not plot_df.empty:
-                fig_scatter = px.scatter(
-                    plot_df,
-                    x='budget_num',
-                    y='asking_num',
-                    color='intent',
-                    hover_data=['client_name', 'phone_number'],
-                    labels={'budget_num': 'Buyer Budget (PKR)', 'asking_num': 'Seller Asking Price (PKR)'},
-                    title="Price Alignment Scatter"
+            st.markdown("**📊 Intent Breakdown (Buy vs Sell vs Both)**")
+            if 'intent' in df_analytics.columns:
+                intent_counts = df_analytics['intent'].value_counts().reset_index()
+                intent_counts.columns = ['Intent', 'Count']
+                fig_pie = px.pie(
+                    intent_counts, 
+                    names='Intent', 
+                    values='Count', 
+                    hole=0.4,
+                    color_discrete_sequence=px.colors.qualitative.Pastel
                 )
-                fig_scatter.update_layout(margin=dict(l=20, r=20, t=30, b=20), height=350)
-                st.plotly_chart(fig_scatter, use_container_width=True)
-            else:
-                st.info("Numeric budget and asking price data needed for scatter plot.")
+                fig_pie.update_layout(margin=dict(l=20, r=20, t=20, b=20), height=350)
+                st.plotly_chart(fig_pie, use_container_width=True)
 
         # 4. Lead Inflow Trends
         with col_chart4:

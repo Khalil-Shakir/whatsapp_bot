@@ -33,6 +33,8 @@ def sanitize_intent(raw_intent):
         return "BUY"
     elif clean in ["SELL", "SELLER", "SELLING"]:
         return "SELL"
+    elif clean in ["BOTH", "BUY_AND_SELL", "SELL_AND_BUY"]:
+        return "BOTH"
     elif clean in ["INQUERY", "INQUIRY", "INFO", "QUESTION", "GENERAL"]:
         return "INQUERY"
     return None
@@ -80,7 +82,7 @@ def on_message(client: NewClient, message: MessageEv):
         inventory = get_properties()
 
         prompt = f"""
-You are the AI Assistant for Malik Property. Answer clients politely and professionally in the same language they use (Urdu/English/Roman Urdu).
+You are the AI Real Estate Assistant for Malik Property (Mianwali). Your primary goal is to guide clients politely and systematically extract all required information while keeping the tone warm and conversational in the client's language (Urdu / Roman Urdu / English).
 
 AVAILABLE INVENTORY:
 {inventory}
@@ -90,21 +92,49 @@ CONVERSATION HISTORY:
 
 CURRENT USER MESSAGE: "{text}"
 
+==================================================
+DATA COLLECTION GUIDELINES:
+1. Determine User Intent:
+   - "BUY": Looking to purchase/rent property.
+   - "SELL": Looking to list/sell property.
+   - "BOTH": User wants to both buy and sell.
+   - "INQUERY": Asking general questions.
+
+2. Buyer Profile Requirements (Extract if Intent is BUY or BOTH):
+   - Client Name
+   - Preferred Location / Mouza
+   - Property Type (Plot, House, Commercial, Agriculture)
+   - Budget Range
+
+3. Seller Profile Requirements (Extract if Intent is SELL or BOTH):
+   - Client Name
+   - Mouza / Location of property
+   - Land Area / Size (e.g., 5 Marla, 1 Kanal)
+   - Asking Price
+   - Ownership Type (fard_e_wahid or khata_shareek)
+   - Document Type (Registry, Inteqal, Stamp)
+
+4. Conversational Rules:
+   - Check CONVERSATION HISTORY to see what details have ALREADY been provided.
+   - DO NOT re-ask for details already captured.
+   - If key information is missing for BUY or SELL, ask for 1 or 2 missing details at a time in your "reply".
+   - Be helpful: answer their question or present inventory options while naturally asking for the next missing piece of information.
+==================================================
+
 INSTRUCTIONS:
-- You MUST respond ONLY with a raw JSON object (no markdown formatting, no code blocks).
-- If you discuss or recommend a specific property from the inventory, include its numeric ID in "matched_property_id".
-- Set "matched_property_id" to null if no specific property is being discussed.
+- Return ONLY a raw JSON object (no markdown formatting, no code blocks).
+- Set "matched_property_id" to integer property ID if discussing/recommending a specific listing, otherwise null.
 
 Return this exact JSON structure:
 {{
-  "reply": "Your message back to the client",
+  "reply": "Your friendly response asking for missing details or helping the client",
   "client_name": "extracted name or null",
-  "intent": "BUY or SELL or INQUERY or null",
+  "intent": "BUY or SELL or BOTH or INQUERY or null",
   "lead_tag": "HOT or WARM or COLD or null",
   "matched_property_id": integer property ID or null,
   "buyer_data": {{
       "preferred_location": "location name or null",
-      "property_type": "Plot/House/etc or null",
+      "property_type": "Plot/House/Commercial/etc or null",
       "budget_range": "budget or null"
   }},
   "seller_data": {{
@@ -120,7 +150,7 @@ Return this exact JSON structure:
         chat_completion = groq_client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model="llama-3.3-70b-versatile",
-            temperature=0.2,
+            temperature=0.3,
             response_format={"type": "json_object"},
         )
 
@@ -133,27 +163,29 @@ Return this exact JSON structure:
 
         update_lead_info(lead_id, data.get("client_name"), clean_intent, clean_tag)
 
-        # Save buyer data
-        if clean_intent == "BUY" and data.get("buyer_data"):
-            buyer_data = data["buyer_data"]
-            save_buyer(
-                lead_id,
-                buyer_data.get("preferred_location"),
-                buyer_data.get("property_type"),
-                buyer_data.get("budget_range"),
-            )
+        # Save buyer data if present (for BUY or BOTH)
+        if data.get("buyer_data"):
+            buyer = data["buyer_data"]
+            if any(buyer.values()):
+                save_buyer(
+                    lead_id,
+                    buyer.get("preferred_location"),
+                    buyer.get("property_type"),
+                    buyer.get("budget_range"),
+                )
 
-        # Save seller data
-        if clean_intent == "SELL" and data.get("seller_data"):
+        # Save seller data if present (for SELL or BOTH)
+        if data.get("seller_data"):
             seller = data["seller_data"]
-            save_seller(
-                lead_id,
-                seller.get("ownership_type"),
-                seller.get("land_are"),
-                seller.get("mouza_location"),
-                seller.get("doc_type"),
-                seller.get("asking_price"),
-            )
+            if any(seller.values()):
+                save_seller(
+                    lead_id,
+                    seller.get("ownership_type"),
+                    seller.get("land_are"),
+                    seller.get("mouza_location"),
+                    seller.get("doc_type"),
+                    seller.get("asking_price"),
+                )
 
         reply_text = data.get("reply", "Thank you for contacting Malik Property.")
 
@@ -179,7 +211,6 @@ Return this exact JSON structure:
             property_record = get_property_by_id(matched_id)
 
             if property_record and hasattr(property_record, "__getitem__"):
-                # Handle dictionary/Row access safely
                 image_path = (
                     property_record["image_url"]
                     if "image_url" in property_record.keys()

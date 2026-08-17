@@ -37,14 +37,15 @@ def init_db():
     con = db_connect()
     cursor = con.cursor()
 
+    # 1. Added 'BOTH' to CHECK constraint
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS leads(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             phone_number TEXT UNIQUE NOT NULL,
             client_name TEXT,
-            intent TEXT CHECK(intent IN ('BUY', 'SELL', 'INQUERY')),
-            lead_tag CHECK(lead_tag IN ('HOT','WARM','COLD')),
+            intent TEXT CHECK(intent IN ('BUY', 'SELL', 'BOTH', 'INQUERY')),
+            lead_tag TEXT CHECK(lead_tag IN ('HOT','WARM','COLD')),
             is_alerted INTEGER DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -52,11 +53,12 @@ def init_db():
         """
     )
 
+    # 2. Changed lead_id type from TEXT to INTEGER UNIQUE
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS seller_properties(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            lead_id TEXT UNIQUE NOT NULL,
+            lead_id INTEGER UNIQUE NOT NULL,
             ownership_type TEXT,
             land_are TEXT,
             mouza_location TEXT,
@@ -67,11 +69,12 @@ def init_db():
         """
     )
 
+    # 3. Added UNIQUE to lead_id to avoid duplicate preference entries
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS buyer_preferences (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            lead_id INTEGER NOT NULL,
+            lead_id INTEGER UNIQUE NOT NULL,
             preferred_location TEXT,
             property_type TEXT,
             budget_range TEXT,
@@ -145,7 +148,7 @@ def update_lead_info(lead_id: int, name: str = None, intent: str = None, tag: st
     con.close()
 
 
-def get_history(lead_id: int, limit: int = 10):
+def get_history(lead_id: int, limit: int = 20):
     con = db_connect()
     cursor = con.cursor()
     cursor.execute(
@@ -204,7 +207,7 @@ def get_property_by_id(property_id: int):
     cursor.execute("SELECT * FROM properties WHERE id = ?", (property_id,))
     row = cursor.fetchone()
     conn.close()
-    return row  # sqlite3.Row object allowing key-based indexing (row["image_url"])
+    return row
 
 
 def get_last_matched_property_id(lead_id: int):
