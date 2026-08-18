@@ -17,6 +17,7 @@ from database import (
     get_property_by_id,
     get_last_matched_property_id
 )
+from utils.whatsapp import generate_wa_link, format_pk_phone
 
 init_db()
 groq_client = Groq()
@@ -72,10 +73,11 @@ def on_message(client: NewClient, message: MessageEv):
         return
 
     sender_jid = message.Info.MessageSource.Chat
-    print(f"📩 Received text from {sender_jid.User}: {text}")
+    clean_phone = format_pk_phone(sender_jid.User)
+    print(f"📩 Received text from {clean_phone}: {text}")
 
     try:
-        lead_id = get_create_lead(sender_jid.User)
+        lead_id = get_create_lead(clean_phone)
         history = get_history(lead_id)
         converse_log(lead_id, "CLIENT", text)
 
@@ -149,7 +151,7 @@ Return this exact JSON structure:
 
         chat_completion = groq_client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-20b",
             temperature=0.3,
             response_format={"type": "json_object"},
         )
@@ -219,7 +221,7 @@ Return this exact JSON structure:
 
                 if image_path and os.path.exists(image_path):
                     print(
-                        f"📸 Sending property image for ID {matched_id} to {sender_jid.User}"
+                        f"📸 Sending property image for ID {matched_id} to {clean_phone}"
                     )
                     client.send_image(
                         to=sender_jid, file=image_path, caption=reply_text
@@ -235,7 +237,7 @@ Return this exact JSON structure:
 
         log_entry = f"[ID: {matched_id}] {reply_text}" if matched_id else reply_text
         converse_log(lead_id, "BOT", log_entry)
-        print(f"✅ Replied to {sender_jid.User}")
+        print(f"✅ Replied to {clean_phone}")
 
     except Exception as e:
         print(f"❌ Error during message processing: {e}")

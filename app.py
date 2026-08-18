@@ -4,7 +4,9 @@ import os
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from database import init_db
+import urllib.parse
+import re
+from database import (init_db, get_buyer_matches)
 
 # -------------------------------------------------------------------
 # Page Config (MUST be the first Streamlit command)
@@ -23,6 +25,27 @@ def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+# --- WHATSAPP UTILITY FUNCTIONS ---
+def format_pk_phone(phone_str: str) -> str:
+    """Sanitizes phone numbers to Pakistani format: 923XXXXXXXXX."""
+    digits = re.sub(r'\D', '', str(phone_str))
+    if digits.startswith("03") and len(digits) == 11:
+        return "92" + digits[1:]
+    elif digits.startswith("923") and len(digits) == 12:
+        return digits
+    elif digits.startswith("3") and len(digits) == 10:
+        return "92" + digits
+    return digits
+
+def generate_wa_link(phone: str, text: str = "") -> str:
+    """Generates an auto-formatted wa.me URL with optional pre-filled text."""
+    clean_phone = format_pk_phone(phone)
+    if not text:
+        return f"https://wa.me/{clean_phone}"
+    encoded_text = urllib.parse.quote(text)
+    return f"https://wa.me/{clean_phone}?text={encoded_text}"
+
 
 def load_full_leads():
     """Performs LEFT JOINs across relational tables to merge lead, buyer, and seller data."""
@@ -53,6 +76,9 @@ def load_full_leads():
     """
     try:
         df = pd.read_sql_query(query, conn)
+        # Dynamic WhatsApp link generation for each record
+        if not df.empty and 'phone_number' in df.columns:
+            df['wa_link'] = df['phone_number'].apply(lambda p: generate_wa_link(p))
     except Exception as e:
         st.error(f"Error reading lead data: {e}")
         df = pd.DataFrame()
@@ -98,11 +124,12 @@ with col_head2:
 # -------------------------------------------------------------------
 # Navigation Tabs
 # -------------------------------------------------------------------
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📋 Combined Lead Intelligence", 
     "📊 Visual Analytics & Insights", 
     "🏠 Inventory & Listings", 
-    "💬 Conversation Logs"
+    "💬 Conversation Logs",
+    "🎯 Auto-Match Engine"
 ])
 
 # ================= ================= ================= =============
@@ -151,7 +178,9 @@ with tab1:
             filtered_df = filtered_df[filtered_df['lead_tag'].isin(tag_filter)]
 
         st.subheader("📋 Unified Lead Table (Buyers + Sellers + Dual Interests)")
-        st.dataframe(
+        
+        # Interactive table with row selection & LinkColumn
+        event = st.dataframe(
             filtered_df,
             use_container_width=True,
             column_config={
@@ -159,8 +188,15 @@ with tab1:
                 "intent": st.column_config.SelectboxColumn("Intent", options=["BUY", "SELL", "BOTH", "INQUERY"]),
                 "phone_number": st.column_config.TextColumn("Phone Number"),
                 "buyer_budget": st.column_config.TextColumn("Buyer Budget"),
-                "seller_asking_price": st.column_config.TextColumn("Seller Asking Price / Notes")
-            }
+                "seller_asking_price": st.column_config.TextColumn("Seller Asking Price / Notes"),
+                "wa_link": st.column_config.LinkColumn(
+                    "WhatsApp Action",
+                    help="Click to open direct WhatsApp chat",
+                    display_text="Chat Now 💬"
+                )
+            },
+            on_select="rerun",
+            selection_mode="single-row"
         )
 
         st.download_button(
@@ -169,6 +205,107 @@ with tab1:
             file_name='malik_property_unified_leads.csv',
             mime='text/csv'
         )
+
+        # ---------------------------------------------------------
+        # PRE-FORMATTED WHATSAPP QUICK RESPONSE TEMPLATES
+        # ---------------------------------------------------------
+        st.divider()
+        st.subheader("⚡ Pre-formatted WhatsApp Quick Templates")
+
+        selected_rows = event.selection.get("rows", [])
+
+        if not selected_rows:
+            st.info("💡 **Tip:** Select any row in the table above to auto-fill quick response templates for that lead.")
+        else:
+            lead = filtered_df.iloc[selected_rows[0]]
+            
+            client_name = lead.get('client_name', 'Valued Client')
+            phone = lead.get('phone_number', '')
+            location = lead.get('buyer_location') or lead.get('seller_mouza') or 'Mouza'
+            budget = lead.get('buyer_budget') or lead.get('seller_asking_price') or 'your specified budget'
+            prop_type = lead.get('buyer_property_type') or lead.get('seller_land_area') or 'property'
+
+            st.markdown(f"**Selected Lead:** `{client_name}` | **Phone:** `{phone}`")
+
+            col_tpl1, col_tpl2 = st.columns(2)
+
+            # --- OPTION A: MATCHING PLOTS TEMPLATE ---
+            with col_tpl1:
+                st.markdown("#### 🎯 Option A: Matching Properties")
+                
+                msg_en = (
+                    f"Assalam-o-Alaikum {client_name}, here are 3 plots matching your budget "
+                    f"({budget}) in {location}:\n\n"
+                    f"1. Top option in {location} ({prop_type})\n"
+                    f"2. Commercial plot near main road\n"
+                    f"3. Residential plot with clear title\n\n"
+                    f"Let me know when you'd like to schedule a site visit!"
+                )
+                
+                msg_ur = (
+                    f"السلام علیکم {client_name} صاحب،\n"
+                    f"آپ کے بجٹ ({budget}) کے مطابق موضہ {location} میں یہ 3 بہترین اپشنز موجود ہیں:\n\n"
+                    f"1. پرائم لوکیشن پلاٹ - {location}\n"
+                    f"2. کمرشل / رہائشی اپشن\n"
+                    f"3. فلیٹ / کلیئر رجسٹری پلاٹ\n\n"
+                    f"کیا آپ آج یا کل ان کا وزٹ کرنا چاہیں گے؟"
+                )
+
+                tab_en1, tab_ur1 = st.tabs(["English Template", "Urdu Template"])
+                
+                with tab_en1:
+                    st.text_area("Preview (English)", msg_en, height=140, key="prev_en_1")
+                    st.link_button(
+                        "🚀 Launch WhatsApp (English)",
+                        url=generate_wa_link(phone, msg_en),
+                        type="primary",
+                        use_container_width=True
+                    )
+
+                with tab_ur1:
+                    st.text_area("Preview (Urdu)", msg_ur, height=140, key="prev_ur_1")
+                    st.link_button(
+                        "🚀 Launch WhatsApp (Urdu)",
+                        url=generate_wa_link(phone, msg_ur),
+                        type="primary",
+                        use_container_width=True
+                    )
+
+            # --- OPTION B: INQUIRY FOLLOW-UP TEMPLATE ---
+            with col_tpl2:
+                st.markdown("#### 🔄 Option B: Inquiry Follow-up")
+                
+                msg_followup_en = (
+                    f"Assalam-o-Alaikum {client_name},\n"
+                    f"Following up on your inquiry regarding property in '{location}'. "
+                    f"Are you still looking to finalize a deal this week?"
+                )
+                
+                msg_followup_ur = (
+                    f"السلام علیکم {client_name} صاحب،\n"
+                    f"آپ کی انکوائری (موضہ {location}) کے حوالے سے فالو اپ کرنا تھا۔ "
+                    f"کیا آپ اس ہفتے بات فائنل کرنا چاہتے ہیں؟"
+                )
+
+                tab_en2, tab_ur2 = st.tabs(["English Follow-up", "Urdu Follow-up"])
+
+                with tab_en2:
+                    st.text_area("Preview (English)", msg_followup_en, height=140, key="prev_en_2")
+                    st.link_button(
+                        "💬 Launch WhatsApp Follow-Up",
+                        url=generate_wa_link(phone, msg_followup_en),
+                        type="secondary",
+                        use_container_width=True
+                    )
+
+                with tab_ur2:
+                    st.text_area("Preview (Urdu)", msg_followup_ur, height=140, key="prev_ur_2")
+                    st.link_button(
+                        "💬 Launch WhatsApp Follow-Up (Urdu)",
+                        url=generate_wa_link(phone, msg_followup_ur),
+                        type="secondary",
+                        use_container_width=True
+                    )
 
 # ================= ================= ================= =============
 # TAB 2: VISUAL ANALYTICS & INSIGHTS
@@ -340,3 +477,96 @@ with tab4:
                 "sender": st.column_config.SelectboxColumn("Sender", options=["CLIENT", "BOT"])
             }
         )
+
+# ================= ================= ================= =============
+# TAB 5: CONVERSATION LOGS
+# ================= ================= ================= =============
+with tab5:
+    st.header("🎯 Buyer ↔ Property Auto-Match Engine")
+    st.caption("Instantly query inventory against buyer criteria to generate match scorecards and send WhatsApp proposals.")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Query leads joined with buyer_preferences
+    cursor.execute("""
+        SELECT 
+            l.id AS lead_id, 
+            COALESCE(NULLIF(l.client_name, ''), 'Awaiting Name') AS client_name, 
+            l.phone_number, 
+            b.preferred_location, 
+            b.property_type, 
+            b.budget_range 
+        FROM leads l
+        JOIN buyer_preferences b ON l.id = b.lead_id
+        ORDER BY l.id DESC
+    """)
+    buyers = cursor.fetchall()
+    conn.close()
+
+    if not buyers:
+        st.info("No active buyers found in database yet.")
+    else:
+        buyer_options = {
+            f"Lead #{b['lead_id']} - {b['client_name']} ({b['phone_number']})": b 
+            for b in buyers
+        }
+        selected_label = st.selectbox("Select Buyer to Match:", list(buyer_options.keys()))
+        selected_buyer = buyer_options[selected_label]
+
+        # Display Selected Buyer Criteria Card
+        st.markdown("### 📋 Buyer Criteria")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Client Name", selected_buyer["client_name"])
+        col2.metric("Preferred Location", selected_buyer["preferred_location"] or "N/A")
+        col3.metric("Property Type", selected_buyer["property_type"] or "N/A")
+        col4.metric("Budget Range", selected_buyer["budget_range"] or "N/A")
+
+        st.divider()
+
+        # Run Auto-Match Engine
+        top_matches = get_buyer_matches(selected_buyer["lead_id"])
+
+        if not top_matches:
+            st.warning("⚠️ No direct inventory matches found for this buyer's current preferences.")
+        else:
+            st.subheader(f"🔥 Top {len(top_matches)} Recommended Matches")
+
+            for match in top_matches:
+                with st.container():
+                    m_col1, m_col2 = st.columns([3, 1])
+
+                    with m_col1:
+                        score = match["score"]
+                        score_color = "🟢" if score >= 75 else ("🟡" if score >= 50 else "🟠")
+                        st.markdown(f"### {score_color} {match['title']} — **{score}% Match**")
+                        
+                        st.write(f"📍 **Location:** {match['location']} | 🏗️ **Type:** {match['property_type']}")
+                        st.write(f"💰 **Asking Price:** {match['price']} | 📐 **Area:** {match['area']}")
+                        st.caption(f"✨ **Match Highlights:** {', '.join(match['reasons'])}")
+
+                    with m_col2:
+                        client_name = selected_buyer["client_name"]
+                        proposal_text = (
+                            f"Assalam-o-Alaikum {client_name}! 🌟\n\n"
+                            f"Based on your requirements, here is a property matching your criteria at Malik Property Mianwali:\n\n"
+                            f"🏠 *{match['title']}*\n"
+                            f"📍 Location: {match['location']}\n"
+                            f"🏗️ Type: {match['property_type']}\n"
+                            f"📐 Area: {match['area']}\n"
+                            f"💰 Price: {match['price']}\n\n"
+                            f"Would you like to schedule a site visit or view the documents?"
+                        )
+
+                        clean_phone = format_pk_phone(selected_buyer["phone_number"])
+                        wa_url = generate_wa_link(clean_phone, proposal_text)
+
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        st.link_button(
+                            "📲 Send Proposal via WhatsApp", 
+                            wa_url, 
+                            type="primary", 
+                            use_container_width=True
+                        )
+
+                st.divider()

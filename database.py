@@ -287,6 +287,131 @@ def save_seller(lead_id: int, ownership: str = None, area: str = None, mouza: st
     con.commit()
     con.close()
 
+def parse_number(val_str):
+    """Extracts numeric digits from strings like '50 Lac', '1.5 Crore', or '5000000'."""
+    if not val_str:
+        return None
+    cleaned = re.sub(r'[^\d.]', '', str(val_str))
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+def get_buyer_matches(lead_id):
+    """
+    Compares buyer preferences against active properties in inventory.
+    Returns top 3 matching properties with match percentage score.
+    """
+    conn = db_connect()
+    cursor = conn.cursor()
+
+    # 1. Check existing column names in buyer_preferences
+    cursor.execute("PRAGMA table_info(buyer_preferences);")
+    buyer_cols = [row[1] for row in cursor.fetchall()]
+
+    if not buyer_cols:
+        conn.close()
+        return []
+
+    # Determine foreign key / primary key column dynamically
+    match_col = "lead_id" if "lead_id" in buyer_cols else "id"
+
+    # Build safe query using existing columns
+    loc_col = "preferred_location" if "preferred_location" in buyer_cols else "NULL"
+    type_col = "property_type" if "property_type" in buyer_cols else "NULL"
+    budget_col = "budget_range" if "budget_range" in buyer_cols else "NULL"
+
+    query = f"""
+        SELECT {loc_col} AS preferred_location, 
+               {type_col} AS property_type, 
+               {budget_col} AS budget_range 
+        FROM buyer_preferences 
+        WHERE {match_col} = ?
+    """
+    
+    try:
+        cursor.execute(query, (lead_id,))
+        buyer = cursor.fetchone()
+    except Exception as e:
+        print(f"⚠️ Error fetching buyer preferences: {e}")
+        buyer = None
+
+    if not buyer:
+        conn.close()
+        return []
+
+    pref_loc = (buyer["preferred_location"] or "").lower().strip()
+    pref_type = (buyer["property_type"] or "").lower().strip()
+    buyer_budget = parse_number(buyer["budget_range"])
+
+    # 2. Check existing column names in properties table
+    cursor.execute("PRAGMA table_info(properties);")
+    prop_cols = [row[1] for row in cursor.fetchall()]
+
+    p_loc = "location_mouza" if "location_mouza" in prop_cols else ("mouza_location" if "mouza_location" in prop_cols else "NULL")
+    p_type = "property_type" if "property_type" in prop_cols else "NULL"
+    p_price = "asking_price" if "asking_price" in prop_cols else ("price" if "price" in prop_cols else "NULL")
+    p_area = "land_area" if "land_area" in prop_cols else ("land_are" if "land_are" in prop_cols else "NULL")
+    p_img = "image_url" if "image_url" in prop_cols else "NULL"
+
+    prop_query = f"""
+        SELECT id, title, 
+               {p_loc} AS location, 
+               {p_type} AS property_type, 
+               {p_price} AS price, 
+               {p_area} AS area, 
+               {p_img} AS image_url 
+        FROM properties
+    """
+
+    try:
+        cursor.execute(prop_query)
+        properties = cursor.fetchall()
+    except Exception as e:
+        print(f"⚠️ Error fetching properties: {e}")
+        properties = []
+    finally:
+        conn.close()
+
+    matches = []
+    for prop in properties:
+        score = 0
+        reasons = []
+
+        prop_loc = (prop["location"] or "").lower().strip()
+        prop_type = (prop["property_type"] or "").lower().strip()
+        prop_price = parse_number(prop["price"])
+
+        # Location Match (40 Points)
+        if pref_loc and prop_loc and (pref_loc in prop_loc or prop_loc in pref_loc):
+            score += 40
+            reasons.append("Location Match")
+
+        # Property Type Match (35 Points)
+        if pref_type and prop_type and (pref_type in prop_type or prop_type in pref_type):
+            score += 35
+            reasons.append("Property Type Match")
+
+        # Budget Match (25 Points) - Within 15% tolerance
+        if buyer_budget and prop_price:
+            if prop_price <= buyer_budget * 1.15:
+                score += 25
+                reasons.append("Within Budget")
+
+        if score > 0:
+            matches.append({
+                "property_id": prop["id"],
+                "title": prop["title"],
+                "location": prop["location"],
+                "property_type": prop["property_type"],
+                "price": prop["price"],
+                "area": prop["area"],
+                "image_url": prop["image_url"],
+                "score": score,
+                "reasons": reasons
+            })
+
+    matches.sort(key=lambda x: x["score"], reverse=True)
+    return matches[:3]
 
 if __name__ == "__main__":
     init_db()
