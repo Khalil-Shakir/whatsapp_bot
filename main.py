@@ -6,7 +6,9 @@ from neonize.client import NewClient
 from neonize.events import MessageEv, ConnectedEv
 from groq import Groq
 from database import (
-    get_create_lead,
+    get_create_lead, 
+    format_pk_phone,
+    update_lead_phone,
     converse_log,
     update_lead_info,
     init_db,
@@ -131,6 +133,7 @@ Return this exact JSON structure:
 {{
   "reply": "Your friendly response asking for missing details or helping the client",
   "client_name": "extracted name or null",
+  "phone_number": "extracted phone number like 03001234567 or null",
   "intent": "BUY or SELL or BOTH or INQUERY or null",
   "lead_tag": "HOT or WARM or COLD or null",
   "matched_property_id": integer property ID or null,
@@ -149,20 +152,45 @@ Return this exact JSON structure:
 }}
 """
 
-        chat_completion = groq_client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],
-            model="openai/gpt-oss-20b",
-            temperature=0.3,
-            response_format={"type": "json_object"},
-        )
+        try:
+            chat_completion = groq_client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="openai/gpt-oss-20b",
+                temperature=0.3,
+                response_format={"type": "json_object"},
+            )
 
-        output_text = chat_completion.choices[0].message.content
-        data = json.loads(output_text)
+            output_text = chat_completion.choices[0].message.content
+            
+            # Clean potential markdown formatting block quotes standard to some models
+            cleaned_text = output_text.replace("```json", "").replace("```", "").strip()
+            data = json.loads(cleaned_text)
+
+        except Exception as llm_error:
+            print(f"⚠️ Groq / JSON Parse Error: {llm_error}")
+            # Fallback dictionary so the script continues smoothly without crashing
+            data = {
+                "reply": "Assalam-o-Alaikum! Malik Property Mianwali mein xushamdeed. Main aapki kya madad kar sakta hoon? Barae meherbani apna naam aur phone number share kar dein.",
+                "client_name": None,
+                "phone_number": None,
+                "intent": "INQUERY",
+                "lead_tag": "WARM",
+                "matched_property_id": None,
+                "buyer_data": {},
+                "seller_data": {}
+            }
 
         # Sanitize intent and tag values
         clean_intent = sanitize_intent(data.get("intent"))
         clean_tag = sanitize_tag(data.get("lead_tag"))
 
+        extracted_phone = data.get("phone_number")
+
+        if extracted_phone:
+            clean_extracted = format_pk_phone(extracted_phone)
+            if clean_extracted:
+                # Update phone_number directly in database for this lead ID
+                lead_id = update_lead_phone(lead_id, clean_extracted)
         update_lead_info(lead_id, data.get("client_name"), clean_intent, clean_tag)
 
         # Save buyer data if present (for BUY or BOTH)
@@ -212,12 +240,8 @@ Return this exact JSON structure:
         if matched_id:
             property_record = get_property_by_id(matched_id)
 
-            if property_record and hasattr(property_record, "__getitem__"):
-                image_path = (
-                    property_record["image_url"]
-                    if "image_url" in property_record.keys()
-                    else None
-                )
+            if property_record:
+                image_path = property_record["image_url"] if "image_url" in property_record.keys() else None
 
                 if image_path and os.path.exists(image_path):
                     print(

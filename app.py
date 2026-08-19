@@ -6,12 +6,18 @@ import plotly.express as px
 import plotly.graph_objects as go
 import urllib.parse
 import re
-from database import (init_db, get_buyer_matches)
+from database import (init_db, get_buyer_matches, get_leads_due_today, update_lead_pipeline, delete_sold_property)
+import io
+from reportlab.lib.pagesizes import letter, landscape
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 # -------------------------------------------------------------------
 # Page Config (MUST be the first Streamlit command)
 # -------------------------------------------------------------------
 st.set_page_config(page_title="Malik Property - Lead Intelligence Dashboard", layout="wide")
+due_leads = get_leads_due_today()
 
 DB_PATH = "leads.db"
 UPLOAD_DIR = "uploads"
@@ -46,6 +52,49 @@ def generate_wa_link(phone: str, text: str = "") -> str:
     encoded_text = urllib.parse.quote(text)
     return f"https://wa.me/{clean_phone}?text={encoded_text}"
 
+def generate_leads_pdf(df):
+    """Generates a PDF bytes object from the leads DataFrame."""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(letter), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
+    story = []
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle('TitleStyle', parent=styles['Heading1'], fontSize=16, leading=22, textColor=colors.HexColor('#1E3A8A'))
+    story.append(Paragraph("<b>Malik Property — Unified Leads Summary</b>", title_style))
+    story.append(Spacer(1, 10))
+
+    cols_to_include = ['lead_id', 'client_name', 'phone_number', 'intent', 'lead_tag', 'buyer_location', 'buyer_budget']
+    available_cols = [col for col in cols_to_include if col in df.columns]
+    
+    pdf_df = df[available_cols].fillna('N/A')
+    headers = [col.replace('_', ' ').title() for col in available_cols]
+    
+    cell_style = ParagraphStyle('CellStyle', fontSize=8, leading=10)
+    header_style = ParagraphStyle('HeaderStyle', fontSize=9, leading=11, fontName='Helvetica-Bold', textColor=colors.white)
+
+    data = [[Paragraph(h, header_style) for h in headers]]
+    
+    for _, row in pdf_df.iterrows():
+        row_data = [Paragraph(str(val), cell_style) for val in row.values]
+        data.append(row_data)
+
+    table = Table(data, repeatRows=1)
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E3A8A')),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')])
+    ]))
+
+    story.append(table)
+    doc.build(story)
+    
+    buffer.seek(0)
+    return buffer.getvalue()
 
 def load_full_leads():
     """Performs LEFT JOINs across relational tables to merge lead, buyer, and seller data."""
@@ -125,11 +174,11 @@ with col_head2:
 # Navigation Tabs
 # -------------------------------------------------------------------
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📋 Combined Lead Intelligence", 
-    "📊 Visual Analytics & Insights", 
-    "🏠 Inventory & Listings", 
-    "💬 Conversation Logs",
-    "🎯 Auto-Match Engine"
+    "Combined Lead Intelligence", 
+    "Visual Analytics & Insights", 
+    "Inventory & Listings", 
+    "Conversation Logs",
+    "Auto-Match Engine"
 ])
 
 # ================= ================= ================= =============
@@ -177,47 +226,128 @@ with tab1:
         if tag_filter and 'lead_tag' in filtered_df.columns:
             filtered_df = filtered_df[filtered_df['lead_tag'].isin(tag_filter)]
 
-        st.subheader("📋 Unified Lead Table (Buyers + Sellers + Dual Interests)")
-        
-        # Interactive table with row selection & LinkColumn
-        event = st.dataframe(
-            filtered_df,
-            use_container_width=True,
-            column_config={
-                "lead_tag": st.column_config.SelectboxColumn("Lead Status", options=["HOT", "WARM", "COLD"]),
-                "intent": st.column_config.SelectboxColumn("Intent", options=["BUY", "SELL", "BOTH", "INQUERY"]),
-                "phone_number": st.column_config.TextColumn("Phone Number"),
-                "buyer_budget": st.column_config.TextColumn("Buyer Budget"),
-                "seller_asking_price": st.column_config.TextColumn("Seller Asking Price / Notes"),
-                "wa_link": st.column_config.LinkColumn(
-                    "WhatsApp Action",
-                    help="Click to open direct WhatsApp chat",
-                    display_text="Chat Now 💬"
-                )
-            },
-            on_select="rerun",
-            selection_mode="single-row"
-        )
+        # --- SUB-TABS TO PREVENT HORIZONTAL SCROLLING ---
+        sub_tab_buyer, sub_tab_seller, sub_tab_all = st.tabs([
+            "Buyer Leads", 
+            "Seller Listings", 
+            "Quick Overview"
+        ])
 
-        st.download_button(
-            label="📥 Export Unified Leads to CSV",
-            data=filtered_df.to_csv(index=False).encode('utf-8'),
-            file_name='malik_property_unified_leads.csv',
-            mime='text/csv'
-        )
+        selected_rows = []
+        active_df = pd.DataFrame()
+
+        # --- 1. BUYER SUB-TAB (5 Essential Columns) ---
+        with sub_tab_buyer:
+            buyer_df = filtered_df[filtered_df['intent'].isin(['BUY', 'BOTH', 'INQUERY'])].copy()
+            
+            buyer_columns = ['lead_id', 'client_name', 'phone_number', 'buyer_location', 'buyer_budget', 'wa_link']
+            display_buyer_df = buyer_df[[c for c in buyer_columns if c in buyer_df.columns]]
+
+            event_buyer = st.dataframe(
+                display_buyer_df,
+                use_container_width=True,
+                column_order=["lead_id", "client_name", "phone_number", "buyer_location", "buyer_budget", "wa_link"],
+                column_config={
+                    "lead_id": st.column_config.NumberColumn("ID", width="small"),
+                    "client_name": st.column_config.TextColumn("Client Name", width="medium"),
+                    "phone_number": st.column_config.TextColumn("Phone", width="medium"),
+                    "buyer_location": st.column_config.TextColumn("Location", width="medium"),
+                    "buyer_budget": st.column_config.TextColumn("Budget", width="medium"),
+                    "wa_link": st.column_config.LinkColumn("Action", display_text="Chat 💬", width="small")
+                },
+                on_select="rerun",
+                selection_mode="single-row",
+                key="df_buyers"
+            )
+
+            if event_buyer.selection.get("rows"):
+                selected_rows = event_buyer.selection["rows"]
+                active_df = display_buyer_df
+
+        # --- 2. SELLER SUB-TAB (5 Essential Columns) ---
+        with sub_tab_seller:
+            seller_df = filtered_df[filtered_df['intent'].isin(['SELL', 'BOTH'])].copy()
+            
+            seller_columns = ['lead_id', 'client_name', 'phone_number', 'seller_mouza', 'seller_asking_price', 'wa_link']
+            display_seller_df = seller_df[[c for c in seller_columns if c in seller_df.columns]]
+
+            event_seller = st.dataframe(
+                display_seller_df,
+                use_container_width=True,
+                column_order=["lead_id", "client_name", "phone_number", "seller_mouza", "seller_asking_price", "wa_link"],
+                column_config={
+                    "lead_id": st.column_config.NumberColumn("ID", width="small"),
+                    "client_name": st.column_config.TextColumn("Client Name", width="medium"),
+                    "phone_number": st.column_config.TextColumn("Phone", width="medium"),
+                    "seller_mouza": st.column_config.TextColumn("Mouza Location", width="medium"),
+                    "seller_asking_price": st.column_config.TextColumn("Asking Price", width="medium"),
+                    "wa_link": st.column_config.LinkColumn("Action", display_text="Chat 💬", width="small")
+                },
+                on_select="rerun",
+                selection_mode="single-row",
+                key="df_sellers"
+            )
+
+            if event_seller.selection.get("rows"):
+                selected_rows = event_seller.selection["rows"]
+                active_df = display_seller_df
+
+        # --- 3. QUICK OVERVIEW SUB-TAB (6 Primary Columns) ---
+        with sub_tab_all:
+            overview_columns = ['lead_id', 'client_name', 'phone_number', 'intent', 'lead_tag', 'wa_link']
+            display_overview_df = filtered_df[[c for c in overview_columns if c in filtered_df.columns]]
+
+            event_all = st.dataframe(
+                display_overview_df,
+                use_container_width=True,
+                column_order=["lead_id", "client_name", "phone_number", "intent", "lead_tag", "wa_link"],
+                column_config={
+                    "lead_id": st.column_config.NumberColumn("ID", width="small"),
+                    "client_name": st.column_config.TextColumn("Client Name", width="medium"),
+                    "phone_number": st.column_config.TextColumn("Phone", width="medium"),
+                    "intent": st.column_config.SelectboxColumn("Intent", options=["BUY", "SELL", "BOTH", "INQUERY"], width="small"),
+                    "lead_tag": st.column_config.SelectboxColumn("Tag", options=["HOT", "WARM", "COLD"], width="small"),
+                    "wa_link": st.column_config.LinkColumn("Action", display_text="Chat 💬", width="small")
+                },
+                on_select="rerun",
+                selection_mode="single-row",
+                key="df_all"
+            )
+
+            if event_all.selection.get("rows"):
+                selected_rows = event_all.selection["rows"]
+                active_df = display_overview_df
+
+        col_dl1, col_dl2 = st.columns(2)
+
+        with col_dl1:
+            st.download_button(
+                label="📥 Export Unified Leads to CSV",
+                data=filtered_df.to_csv(index=False).encode('utf-8'),
+                file_name='malik_property_unified_leads.csv',
+                mime='text/csv',
+                use_container_width=True
+            )
+
+        with col_dl2:
+            st.download_button(
+                label="📄 Export Unified Leads to PDF",
+                data=generate_leads_pdf(filtered_df),
+                file_name='malik_property_unified_leads.pdf',
+                mime='application/pdf',
+                use_container_width=True
+            )
 
         # ---------------------------------------------------------
         # PRE-FORMATTED WHATSAPP QUICK RESPONSE TEMPLATES
         # ---------------------------------------------------------
         st.divider()
-        st.subheader("⚡ Pre-formatted WhatsApp Quick Templates")
+        st.subheader("Pre-formatted WhatsApp Quick Templates")
 
-        selected_rows = event.selection.get("rows", [])
-
-        if not selected_rows:
-            st.info("💡 **Tip:** Select any row in the table above to auto-fill quick response templates for that lead.")
+        if not selected_rows or active_df.empty:
+            st.info("💡 **Tip:** Select any row in the tables above to auto-fill quick response templates for that lead.")
         else:
-            lead = filtered_df.iloc[selected_rows[0]]
+            lead = active_df.iloc[selected_rows[0]]
             
             client_name = lead.get('client_name', 'Valued Client')
             phone = lead.get('phone_number', '')
@@ -256,7 +386,7 @@ with tab1:
                 with tab_en1:
                     st.text_area("Preview (English)", msg_en, height=140, key="prev_en_1")
                     st.link_button(
-                        "🚀 Launch WhatsApp (English)",
+                        "Launch WhatsApp (English)",
                         url=generate_wa_link(phone, msg_en),
                         type="primary",
                         use_container_width=True
@@ -265,7 +395,7 @@ with tab1:
                 with tab_ur1:
                     st.text_area("Preview (Urdu)", msg_ur, height=140, key="prev_ur_1")
                     st.link_button(
-                        "🚀 Launch WhatsApp (Urdu)",
+                        "Launch WhatsApp (Urdu)",
                         url=generate_wa_link(phone, msg_ur),
                         type="primary",
                         use_container_width=True
@@ -292,7 +422,7 @@ with tab1:
                 with tab_en2:
                     st.text_area("Preview (English)", msg_followup_en, height=140, key="prev_en_2")
                     st.link_button(
-                        "💬 Launch WhatsApp Follow-Up",
+                        "Launch WhatsApp Follow-Up",
                         url=generate_wa_link(phone, msg_followup_en),
                         type="secondary",
                         use_container_width=True
@@ -301,12 +431,11 @@ with tab1:
                 with tab_ur2:
                     st.text_area("Preview (Urdu)", msg_followup_ur, height=140, key="prev_ur_2")
                     st.link_button(
-                        "💬 Launch WhatsApp Follow-Up (Urdu)",
+                        "Launch WhatsApp Follow-Up (Urdu)",
                         url=generate_wa_link(phone, msg_followup_ur),
                         type="secondary",
                         use_container_width=True
                     )
-
 # ================= ================= ================= =============
 # TAB 2: VISUAL ANALYTICS & INSIGHTS
 # ================= ================= ================= =============
@@ -321,7 +450,7 @@ with tab2:
 
         # 1. Lead Conversion Funnel
         with col_chart1:
-            st.markdown("**🎯 Lead Conversion Funnel**")
+            st.markdown("**Lead Conversion Funnel**")
             tag_counts = df_analytics['lead_tag'].value_counts() if 'lead_tag' in df_analytics.columns else pd.Series()
             
             funnel_stages = ["New Lead", "Hot Lead", "Warm Lead", "Cold Lead"]
@@ -424,7 +553,7 @@ with tab3:
             description = st.text_area("Key Details / Highlights", placeholder="Mention features, road width, urgency, etc.")
 
         uploaded_image = st.file_uploader("📸 Upload Property Photo (JPEG/PNG)", type=["jpg", "jpeg", "png"])
-        submitted = st.form_submit_button("🚀 Publish Property")
+        submitted = st.form_submit_button("Publish Property")
         
         if submitted:
             if title and location_mouza:
@@ -458,7 +587,40 @@ with tab3:
     properties_df = pd.read_sql_query("SELECT * FROM properties WHERE status='AVAILABLE' ORDER BY created_at DESC", conn)
     conn.close()
     
-    st.dataframe(properties_df, use_container_width=True)
+    # --- UPDATED SECTION BELOW: REPLACED st.dataframe WITH MEDIA PURGE UI CARDS ---
+    if properties_df.empty:
+        st.info("No active listings available right now.")
+    else:
+        for _, prop in properties_df.iterrows():
+            with st.container():
+                col_info, col_img, col_act = st.columns([3, 2, 2])
+                
+                with col_info:
+                    st.markdown(f"### 🏠 {prop['title']}")
+                    st.write(f"📍 **Location:** {prop['location_mouza']} | 🏗️ **Type:** {prop['property_type']}")
+                    st.write(f"💰 **Demand:** PKR {prop['asking_price']:,.2f} | 📐 **Area:** {prop['land_area']}")
+                    if prop['description']:
+                        st.caption(f"📝 {prop['description']}")
+
+                with col_img:
+                    # Display uploaded media preview if available
+                    if prop['image_url'] and os.path.exists(prop['image_url']):
+                        st.image(prop['image_url'], width=150, caption="Property Media")
+                    else:
+                        st.caption("📷 No image attached")
+
+                with col_act:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    # Trigger the automatic database entry drop and disk media removal
+                    if st.button("🏷️ Mark as Sold & Purge", key=f"purge_prop_{prop['id']}", type="primary", use_container_width=True):
+                        if delete_sold_property(prop['id']):
+                            st.success("✅ Property sold! Database row and local media file deleted.")
+                            st.rerun()
+                        else:
+                            st.error("❌ Failed to purge media or delete property entry.")
+
+            st.divider()
+
 
 # ================= ================= ================= =============
 # TAB 4: CONVERSATION LOGS
@@ -570,3 +732,98 @@ with tab5:
                         )
 
                 st.divider()
+
+if due_leads:
+    with st.container():
+        st.error(f"🚨 **ACTION REQUIRED:** {len(due_leads)} Lead(s) Need Follow-Up Today or Are Overdue!")
+        
+        with st.expander("📋 View Leads Due Today"):
+            for lead in due_leads:
+                col_info, col_act = st.columns([3, 1])
+                with col_info:
+                    st.markdown(
+                        f"👤 **{lead['client_name']}** (`{lead['phone_number']}`) | "
+                        f"Tag: **{lead['lead_tag'] or 'N/A'}** | Stage: **{lead['lead_stage']}** | "
+                        f"📅 Due: `{lead['next_contact_date']}`"
+                    )
+                with col_act:
+                    followup_text = f"Assalam-o-Alaikum {lead['client_name']}! Following up from Malik Property Mianwali regarding your property inquiry. How can we assist you today?"
+                    clean_phone = format_pk_phone(lead['phone_number'])
+                    wa_url = generate_wa_link(clean_phone, followup_text)
+                    st.link_button("💬 WhatsApp Follow-Up", wa_url, use_container_width=True)
+st.divider()
+
+# =========================================================
+# 📊 2. LEAD PIPELINE DATA EDITOR
+# =========================================================
+st.subheader("📌 Lead Pipeline & Follow-Up Manager")
+st.caption("Manage stages, schedule follow-up dates, and track sales progression in real time.")
+
+conn = get_db_connection()
+cursor = conn.cursor()
+cursor.execute("""
+    SELECT 
+        id, 
+        COALESCE(NULLIF(client_name, ''), 'Awaiting Name') AS client_name, 
+        phone_number, 
+        COALESCE(intent, 'INQUERY') AS intent, 
+        COALESCE(lead_tag, 'COLD') AS lead_tag, 
+        COALESCE(lead_stage, 'New Inquiry') AS lead_stage,
+        next_contact_date
+    FROM leads
+    ORDER BY id DESC
+""")
+raw_leads = cursor.fetchall()
+conn.close()
+
+if raw_leads:
+    df_leads = pd.DataFrame([dict(r) for r in raw_leads])
+    
+    # Convert string dates to datetime for st.data_editor datepicker
+    df_leads["next_contact_date"] = pd.to_datetime(df_leads["next_contact_date"]).dt.date
+
+    STAGE_OPTIONS = [
+        "New Inquiry",
+        "Site Visit Scheduled",
+        "Token Given / Bayana",
+        "Closed Deal"
+    ]
+
+    # Render st.data_editor with DatePicker & Stage Selectbox
+    edited_df = st.data_editor(
+        df_leads,
+        column_config={
+            "id": st.column_config.NumberColumn("Lead ID", disabled=True),
+            "client_name": "Client Name",
+            "phone_number": st.column_config.TextColumn("Phone", disabled=True),
+            "intent": st.column_config.TextColumn("Intent", disabled=True),
+            "lead_tag": st.column_config.TextColumn("Tag", disabled=True),
+            "lead_stage": st.column_config.SelectboxColumn(
+                "Pipeline Stage",
+                options=STAGE_OPTIONS,
+                required=True,
+                help="Track the progression of this lead"
+            ),
+            "next_contact_date": st.column_config.DateColumn(
+                "Next Contact Date",
+                help="Set a reminder date for agent follow-up",
+                format="YYYY-MM-DD"
+            )
+        },
+        use_container_width=True,
+        hide_index=True,
+        key="lead_pipeline_editor"
+    )
+
+    # Save edits back to SQLite when user makes changes in the editor table
+    if st.button("💾 Save Pipeline Updates", type="primary"):
+        for _, row in edited_df.iterrows():
+            lead_id = int(row["id"])
+            contact_date = str(row["next_contact_date"]) if pd.notnull(row["next_contact_date"]) else None
+            stage = row["lead_stage"]
+            update_lead_pipeline(lead_id, contact_date, stage)
+        
+        st.success("✅ Pipeline stages and follow-up dates updated successfully!")
+        st.rerun()
+else:
+    st.info("No leads available in the pipeline.")

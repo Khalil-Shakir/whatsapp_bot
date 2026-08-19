@@ -1,6 +1,6 @@
 import sqlite3
 import re
-from datetime import datetime
+from datetime import (datetime, date)
 
 DB_NAME = "leads.db"
 
@@ -12,31 +12,89 @@ def db_connect():
     connect_db.execute("PRAGMA busy_timeout = 30000;")
     return connect_db
 
+def format_pk_phone(phone_str: str) -> str:
+    """Sanitizes phone numbers to clean Pakistani format: 923XXXXXXXXX."""
+    if not phone_str:
+        return ""
+    # Strip @s.whatsapp.net or non-digit chars
+    digits = re.sub(r'\D', '', str(phone_str))
+    
+    if digits.startswith("03") and len(digits) == 11:
+        return "92" + digits[1:]
+    elif digits.startswith("923") and len(digits) == 12:
+        return digits
+    elif digits.startswith("3") and len(digits) == 10:
+        return "92" + digits
+    return digits
 
+
+def update_lead_phone(current_lead_id: int, phone_number: str) -> int:
+    """Updates or merges lead records when a valid Pakistani phone number is provided."""
+    clean_phone = format_pk_phone(phone_number)
+    if not clean_phone:
+        return current_lead_id
+
+    con = db_connect()
+    cursor = con.cursor()
+
+    try:
+        # Check if the phone number already exists under a different lead ID
+        cursor.execute("SELECT id FROM leads WHERE phone_number = ?", (clean_phone,))
+        existing_lead = cursor.fetchone()
+
+        if existing_lead and existing_lead["id"] != current_lead_id:
+            existing_id = existing_lead["id"]
+            
+            # Reassign message history from temporary lead to the existing lead
+            cursor.execute("UPDATE messages SET lead_id = ? WHERE lead_id = ?", (existing_id, current_lead_id))
+            
+            # Remove the temporary lead record
+            cursor.execute("DELETE FROM leads WHERE id = ?", (current_lead_id,))
+            con.commit()
+            return existing_id
+
+        # Update phone number normally if no duplicate exists
+        cursor.execute(
+            "UPDATE leads SET phone_number = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (clean_phone, current_lead_id)
+        )
+        con.commit()
+        return current_lead_id
+
+    except sqlite3.Error as e:
+        print(f"⚠️ Database error during phone update: {e}")
+        con.rollback()
+        return current_lead_id
+    finally:
+        con.close()
+        
 def get_create_lead(phone_number: str):
     con = db_connect()
     cursor = con.cursor()
 
+    # Sanitize phone number before querying or inserting
+    clean_phone = format_pk_phone(phone_number)
+
     cursor.execute(
-        "SELECT id FROM leads WHERE phone_number=?", (phone_number,)
+        "SELECT id FROM leads WHERE phone_number=?", (clean_phone,)
     )
     row = cursor.fetchone()
     if row:
         lead_id = row["id"]
     else:
         cursor.execute(
-            "INSERT INTO leads (phone_number) VALUES (?)", (phone_number,)
+            "INSERT INTO leads (phone_number) VALUES (?)", (clean_phone,)
         )
         con.commit()
         lead_id = cursor.lastrowid
     con.close()
     return lead_id
 
-
 def init_db():
     con = db_connect()
     cursor = con.cursor()
 
+    cursor.execute("PRAGMA foreign_keys = ON;")
     # 1. Added 'BOTH' to CHECK constraint
     cursor.execute(
         """
@@ -47,6 +105,8 @@ def init_db():
             intent TEXT CHECK(intent IN ('BUY', 'SELL', 'BOTH', 'INQUERY')),
             lead_tag TEXT CHECK(lead_tag IN ('HOT','WARM','COLD')),
             is_alerted INTEGER DEFAULT 0,
+            next_contact_date TEXT,
+            lead_stage TEXT DEFAULT 'New Inquiry',
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )        
@@ -60,12 +120,13 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             lead_id INTEGER UNIQUE NOT NULL,
             ownership_type TEXT,
-            land_are TEXT,
+            land_area TEXT,
             mouza_location TEXT,
             doc_type TEXT,
             asking_price TEXT,
+            status TEXT CHECK(status IN ('AVAILABLE', 'PENDING', 'SOLD')) DEFAULT 'AVAILABLE',
             FOREIGN KEY (lead_id) REFERENCES leads (id) ON DELETE CASCADE
-        )        
+        )      
         """
     )
 
@@ -148,7 +209,7 @@ def update_lead_info(lead_id: int, name: str = None, intent: str = None, tag: st
     con.close()
 
 
-def get_history(lead_id: int, limit: int = 20):
+def get_history(lead_id: int, limit: int = 12):
     con = db_connect()
     cursor = con.cursor()
     cursor.execute(
@@ -192,6 +253,77 @@ def get_properties():
         )
     return "\n".join(formatted_listings)
 
+def mark_property_as_sold(property_id: int) -> bool:
+    """
+    Updates status to 'SOLD' and deletes the associated image file from disk.
+    """
+    con = db_connect()
+    con.row_factory = sqlite3.Row
+    cursor = con.cursor()
+
+    try:
+        # Fetch image path before updating status
+        cursor.execute("SELECT image_url FROM properties WHERE id = ?", (property_id,))
+        row = cursor.fetchone()
+
+        if row and row["image_url"]:
+            image_path = row["image_url"]
+            # Delete physical image file if it exists
+            if os.path.exists(image_path):
+                os.remove(image_path)
+                print(f"🗑️ Deleted property image: {image_path}")
+
+        # Update property status and clear image reference
+        cursor.execute(
+            """
+            UPDATE properties 
+            SET status = 'SOLD', image_url = NULL 
+            WHERE id = ?
+            """, 
+            (property_id,)
+        )
+        
+        con.commit()
+        return True
+    except Exception as e:
+        print(f"❌ Error updating property status: {e}")
+        con.rollback()
+        return False
+    finally:
+        con.close()
+
+def delete_sold_property(property_id: int) -> bool:
+    """
+    Deletes property record from SQLite and purges associated 
+    image and video files from disk to conserve storage.
+    """
+    con = sqlite3.connect("leads.db")
+    con.row_factory = sqlite3.Row
+    cursor = con.cursor()
+
+    try:
+        # 1. Fetch file paths before deleting the database entry
+        cursor.execute("SELECT image_url FROM properties WHERE id = ?", (property_id,))
+        row = cursor.fetchone()
+
+        if row and row["image_url"]:
+            file_path = row["image_url"]
+            # 2. Delete physical media file from storage
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                print(f"🗑️ Purged media file: {file_path}")
+
+        # 3. Permanently remove the property from the database
+        cursor.execute("DELETE FROM properties WHERE id = ?", (property_id,))
+        con.commit()
+        return True
+
+    except Exception as e:
+        print(f"❌ Error purging property media: {e}")
+        con.rollback()
+        return False
+    finally:
+        con.close()
 
 def get_property_by_id(property_id: int):
     """Retrieves a single property record from the properties table by its integer ID."""
@@ -412,6 +544,34 @@ def get_buyer_matches(lead_id):
 
     matches.sort(key=lambda x: x["score"], reverse=True)
     return matches[:3]
+
+def update_lead_pipeline(lead_id, next_contact_date, lead_stage):
+    """Updates the follow-up date and stage for a given lead."""
+    conn = db_connect()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE leads 
+        SET next_contact_date = ?, lead_stage = ?
+        WHERE id = ?
+    """, (str(next_contact_date) if next_contact_date else None, lead_stage, lead_id))
+    conn.commit()
+    conn.close()
+
+def get_leads_due_today():
+    """Fetches leads where next_contact_date is today or overdue."""
+    today_str = date.today().isoformat()
+    conn = db_connect()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, COALESCE(NULLIF(client_name, ''), 'Awaiting Name') AS client_name, 
+               phone_number, intent, lead_tag, next_contact_date, COALESCE(lead_stage, 'New Inquiry') AS lead_stage
+        FROM leads
+        WHERE next_contact_date IS NOT NULL AND next_contact_date <= ?
+        ORDER BY next_contact_date ASC
+    """, (today_str,))
+    due_leads = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return due_leads
 
 if __name__ == "__main__":
     init_db()
