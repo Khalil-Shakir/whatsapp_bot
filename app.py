@@ -570,8 +570,8 @@ with tab3:
                 cursor = conn.cursor()
                 cursor.execute("""
                     INSERT INTO properties 
-                    (title, property_type, intent_type, location_mouza, land_area, asking_price, ownership_type, doc_type, description, image_url)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (title, property_type, intent_type, location_mouza, land_area, asking_price, ownership_type, doc_type, description, image_url, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'AVAILABLE')
                 """, (title, property_type, intent_type, location_mouza, land_area, asking_price, ownership_type, doc_type, description, saved_image_path))
                 conn.commit()
                 conn.close()
@@ -581,46 +581,60 @@ with tab3:
                 st.error("Please fill in required fields (Title & Location).")
 
     st.divider()
-    st.subheader("📦 Current Active Inventory")
+    st.subheader("📦 Interactive Inventory Manager")
+    st.caption("⚡ **Auto-Purge Feature Active:** Changing any item's status to **SOLD** directly in the table cell will immediately delete its database record and purge all associated media files from storage.")
     
     conn = get_db_connection()
-    properties_df = pd.read_sql_query("SELECT * FROM properties WHERE status='AVAILABLE' ORDER BY created_at DESC", conn)
+    properties_df = pd.read_sql_query(
+        "SELECT id, title, property_type, intent_type, location_mouza, land_area, asking_price, status, image_url, created_at FROM properties ORDER BY created_at DESC", 
+        conn
+    )
     conn.close()
-    
-    # --- UPDATED SECTION BELOW: REPLACED st.dataframe WITH MEDIA PURGE UI CARDS ---
+
     if properties_df.empty:
-        st.info("No active listings available right now.")
+        st.info("No active properties found in inventory.")
     else:
-        for _, prop in properties_df.iterrows():
-            with st.container():
-                col_info, col_img, col_act = st.columns([3, 2, 2])
+        # Interactive table editor with dropdown cell for Status
+        edited_inventory = st.data_editor(
+            properties_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "id": st.column_config.NumberColumn("ID", disabled=True, width="small"),
+                "title": st.column_config.TextColumn("Title", disabled=True, width="medium"),
+                "property_type": st.column_config.TextColumn("Type", disabled=True, width="small"),
+                "intent_type": st.column_config.TextColumn("Purpose", disabled=True, width="small"),
+                "location_mouza": st.column_config.TextColumn("Mouza", disabled=True, width="medium"),
+                "land_area": st.column_config.TextColumn("Area", disabled=True, width="small"),
+                "asking_price": st.column_config.NumberColumn("Price (PKR)", format="PKR %d", disabled=True),
+                "status": st.column_config.SelectboxColumn(
+                    "Status",
+                    options=["AVAILABLE", "PENDING", "SOLD"],
+                    width="medium",
+                    required=True,
+                    help="Select SOLD to trigger automatic disk and media cleanup."
+                ),
+                "image_url": st.column_config.TextColumn("Media Path", disabled=True, width="medium"),
+                "created_at": st.column_config.TextColumn("Created Date", disabled=True, width="small")
+            },
+            key="inventory_table_editor"
+        )
+
+        # Detect real-time updates in the Status dropdown
+        for index, row in edited_inventory.iterrows():
+            original_status = properties_df.loc[properties_df['id'] == row['id'], 'status'].values[0]
+            new_status = row['status']
+
+            # Trigger immediate purge on status change to 'SOLD'
+            if new_status == "SOLD" and original_status != "SOLD":
+                property_id = int(row['id'])
                 
-                with col_info:
-                    st.markdown(f"### 🏠 {prop['title']}")
-                    st.write(f"📍 **Location:** {prop['location_mouza']} | 🏗️ **Type:** {prop['property_type']}")
-                    st.write(f"💰 **Demand:** PKR {prop['asking_price']:,.2f} | 📐 **Area:** {prop['land_area']}")
-                    if prop['description']:
-                        st.caption(f"📝 {prop['description']}")
-
-                with col_img:
-                    # Display uploaded media preview if available
-                    if prop['image_url'] and os.path.exists(prop['image_url']):
-                        st.image(prop['image_url'], width=150, caption="Property Media")
-                    else:
-                        st.caption("📷 No image attached")
-
-                with col_act:
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    # Trigger the automatic database entry drop and disk media removal
-                    if st.button("🏷️ Mark as Sold & Purge", key=f"purge_prop_{prop['id']}", type="primary", use_container_width=True):
-                        if delete_sold_property(prop['id']):
-                            st.success("✅ Property sold! Database row and local media file deleted.")
-                            st.rerun()
-                        else:
-                            st.error("❌ Failed to purge media or delete property entry.")
-
-            st.divider()
-
+                # Execute deletion
+                if delete_sold_property(property_id):
+                    st.toast(f"🗑️ Property #{property_id} sold! Media purged and record deleted.", icon="✅")
+                    st.rerun()
+                else:
+                    st.error(f"❌ Failed to purge media for property #{property_id}. Check terminal logs.")
 
 # ================= ================= ================= =============
 # TAB 4: CONVERSATION LOGS

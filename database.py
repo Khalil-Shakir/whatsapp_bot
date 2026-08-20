@@ -1,5 +1,6 @@
 import sqlite3
 import re
+import os
 from datetime import (datetime, date)
 
 DB_NAME = "leads.db"
@@ -294,32 +295,36 @@ def mark_property_as_sold(property_id: int) -> bool:
 
 def delete_sold_property(property_id: int) -> bool:
     """
-    Deletes property record from SQLite and purges associated 
-    image and video files from disk to conserve storage.
+    Safely purges associated media from storage and removes 
+    the sold property record from SQLite.
     """
-    con = sqlite3.connect("leads.db")
+    # Use timeout to prevent database lock collisions
+    con = sqlite3.connect("leads.db", timeout=10)
     con.row_factory = sqlite3.Row
     cursor = con.cursor()
 
     try:
-        # 1. Fetch file paths before deleting the database entry
+        # 1. Fetch media path
         cursor.execute("SELECT image_url FROM properties WHERE id = ?", (property_id,))
         row = cursor.fetchone()
 
+        # 2. Delete physical file from disk if present
         if row and row["image_url"]:
-            file_path = row["image_url"]
-            # 2. Delete physical media file from storage
+            file_path = str(row["image_url"]).strip()
             if os.path.exists(file_path):
-                os.remove(file_path)
-                print(f"🗑️ Purged media file: {file_path}")
+                try:
+                    os.remove(file_path)
+                    print(f"🗑️ Purged media file: {file_path}")
+                except Exception as img_err:
+                    print(f"⚠️ Could not delete file (might be open elsewhere): {img_err}")
 
-        # 3. Permanently remove the property from the database
+        # 3. Purge record from SQLite
         cursor.execute("DELETE FROM properties WHERE id = ?", (property_id,))
         con.commit()
         return True
 
     except Exception as e:
-        print(f"❌ Error purging property media: {e}")
+        print(f"❌ Error purging property #{property_id}: {e}")
         con.rollback()
         return False
     finally:
