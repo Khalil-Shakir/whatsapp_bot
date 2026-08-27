@@ -109,18 +109,19 @@ def load_full_leads():
         -- Buyer Preferences
         b.preferred_location AS buyer_location,
         b.property_type AS buyer_property_type,
+        b.land_area AS buyer_land_area,
         b.budget_range AS buyer_budget,
         -- Seller Properties
         s.mouza_location AS seller_mouza,
-        s.land_are AS seller_land_area,
+        s.land_area AS seller_land_area,    
         s.ownership_type AS seller_ownership,
         s.doc_type AS seller_doc_type,
         COALESCE(NULLIF(s.asking_price, ''), 'Dealer Market Estimate Required') AS seller_asking_price,
         l.created_at,
         l.updated_at
     FROM leads l
-    LEFT JOIN buyer_preferences b ON l.id = b.lead_id
-    LEFT JOIN seller_properties s ON l.id = s.lead_id
+    LEFT JOIN buyer_profiles b ON l.id = b.lead_id
+    LEFT JOIN seller_profiles s ON l.id = s.lead_id
     ORDER BY l.updated_at DESC
     """
     try:
@@ -129,12 +130,18 @@ def load_full_leads():
         if not df.empty and 'phone_number' in df.columns:
             df['wa_link'] = df['phone_number'].apply(lambda p: generate_wa_link(p))
     except Exception as e:
-        st.error(f"Error reading lead data: {e}")
-        df = pd.DataFrame()
+        # Fallback if your DB tables use the older _preferences naming convention
+        query_alt = query.replace("buyer_profiles", "buyer_preferences").replace("seller_profiles", "seller_properties")
+        try:
+            df = pd.read_sql_query(query_alt, conn)
+            if not df.empty and 'phone_number' in df.columns:
+                df['wa_link'] = df['phone_number'].apply(lambda p: generate_wa_link(p))
+        except Exception as err:
+            st.error(f"Error reading lead data: {err}")
+            df = pd.DataFrame()
     finally:
         conn.close()
     return df
-
 def load_conversation_logs():
     """Fetches full chat history with lead details."""
     conn = get_db_connection()
@@ -246,12 +253,13 @@ with tab1:
             event_buyer = st.dataframe(
                 display_buyer_df,
                 use_container_width=True,
-                column_order=["lead_id", "client_name", "phone_number", "buyer_location", "buyer_budget", "wa_link"],
+                column_order=["lead_id", "client_name", "phone_number", "buyer_location", 'buyer_land_area', "buyer_budget", "wa_link"],
                 column_config={
                     "lead_id": st.column_config.NumberColumn("ID", width="small"),
                     "client_name": st.column_config.TextColumn("Client Name", width="medium"),
                     "phone_number": st.column_config.TextColumn("Phone", width="medium"),
                     "buyer_location": st.column_config.TextColumn("Location", width="medium"),
+                    "buyer_land_area": st.column_config.TextColumn("Land Area", width="small"),
                     "buyer_budget": st.column_config.TextColumn("Budget", width="medium"),
                     "wa_link": st.column_config.LinkColumn("Action", display_text="Chat 💬", width="small")
                 },
@@ -268,7 +276,7 @@ with tab1:
         with sub_tab_seller:
             seller_df = filtered_df[filtered_df['intent'].isin(['SELL', 'BOTH'])].copy()
             
-            seller_columns = ['lead_id', 'client_name', 'phone_number', 'seller_mouza', 'seller_asking_price', 'wa_link']
+            seller_columns = ['lead_id', 'client_name', 'phone_number', 'seller_mouza', 'seller_land_area', 'seller_asking_price', 'wa_link']
             display_seller_df = seller_df[[c for c in seller_columns if c in seller_df.columns]]
 
             event_seller = st.dataframe(
@@ -280,6 +288,7 @@ with tab1:
                     "client_name": st.column_config.TextColumn("Client Name", width="medium"),
                     "phone_number": st.column_config.TextColumn("Phone", width="medium"),
                     "seller_mouza": st.column_config.TextColumn("Mouza Location", width="medium"),
+                    "seller_land_area": st.column_config.TextColumn("Land Area", width="medium"),
                     "seller_asking_price": st.column_config.TextColumn("Asking Price", width="medium"),
                     "wa_link": st.column_config.LinkColumn("Action", display_text="Chat 💬", width="small")
                 },

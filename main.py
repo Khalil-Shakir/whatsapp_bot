@@ -2,8 +2,9 @@ import logging
 import threading
 import json
 import os
+import time
 from neonize.client import NewClient
-from neonize.events import MessageEv, ConnectedEv
+from neonize.events import (MessageEv, ConnectedEv, LoggedOutEv, DisconnectedEv)
 from groq import Groq
 from database import (
     get_create_lead, 
@@ -17,7 +18,8 @@ from database import (
     save_seller,
     get_properties,
     get_property_by_id,
-    get_last_matched_property_id
+    get_last_matched_property_id,
+    get_lead_state_payload
 )
 from utils.whatsapp import generate_wa_link, format_pk_phone
 
@@ -85,11 +87,17 @@ def on_message(client: NewClient, message: MessageEv):
 
         inventory = get_properties()
 
+        history = get_history(lead_id)
+        is_first_message = len(history) == 0
+        state_payload = get_lead_state_payload(lead_id)
         prompt = f"""
 You are the AI Real Estate Assistant for Malik Property (Mianwali). Your primary goal is to guide clients politely and systematically extract all required information while keeping the tone warm and conversational in the client's language (Urdu / Roman Urdu / English).
 
 AVAILABLE INVENTORY:
 {inventory}
+
+CURRENT EXTRACTED CLIENT STATE (PERMANENT MEMORY):
+{json.dumps(state_payload, indent=2)}
 
 CONVERSATION HISTORY:
 {history}
@@ -108,6 +116,7 @@ DATA COLLECTION GUIDELINES:
    - Client Name
    - Preferred Location / Mouza
    - Property Type (Plot, House, Commercial, Agriculture)
+   - Land Area / Size (e.g., 5 Marla, 10 Marla, 1 Kanal)
    - Budget Range
 
 3. Seller Profile Requirements (Extract if Intent is SELL or BOTH):
@@ -121,10 +130,30 @@ DATA COLLECTION GUIDELINES:
 4. Conversational Rules:
    - Check CONVERSATION HISTORY to see what details have ALREADY been provided.
    - DO NOT re-ask for details already captured.
+   - GREETING RULES (STRICT):
+     * FIRST MESSAGE STATUS: {"YES - Send initial greeting" if is_first_message else "NO - Ongoing conversation"}
+     * If FIRST MESSAGE IS TRUE: Start your response with "Assalam-o-Alaikum! Malik Property mein khushamdeed."
+     * If FIRST MESSAGE IS FALSE: DO NOT say "Assalam-o-Alaikum".
+     * If the user says "Salam" or "Assalam-o-Alaikum" in an ongoing chat, reply ONLY with "Walaikum Assalam".
+   - Check CONVERSATION HISTORY to see what details have ALREADY been provided.
+   - DO NOT re-ask for details already captured.
    - If key information is missing for BUY or SELL, ask for 1 or 2 missing details at a time in your "reply".
    - Be helpful: answer their question or present inventory options while naturally asking for the next missing piece of information.
-==================================================
 
+
+   ==================================================
+   ==================================================
+    LANGUAGE & VOCABULARY RULES (CRITICAL):
+    - Target Languages: Standard Urdu, Pakistani Roman Urdu, or English.
+    - STRICTLY PROHIBITED (HINDI WORDS): Never use Hindi vocabulary.
+    ❌ Banned Words: sawagat, swagat, namaste, kripya, dhanyawad, kripya, aabhari, pranam.
+    - ✅ Correct Roman Urdu Equivalents: 
+    * "Khushamdeed" (not swagat)
+    * "Meherbani" or "Barae meherbani" (not kripya)
+    * "Shukriya" or "Nawazish" (not dhanyawad)
+    * "Barah e karam" (not karipya)
+    * "Assalam-o-Alaikum" (not namaste/pranam)
+    ==================================================
 INSTRUCTIONS:
 - Return ONLY a raw JSON object (no markdown formatting, no code blocks).
 - Set "matched_property_id" to integer property ID if discussing/recommending a specific listing, otherwise null.
@@ -140,11 +169,12 @@ Return this exact JSON structure:
   "buyer_data": {{
       "preferred_location": "location name or null",
       "property_type": "Plot/House/Commercial/etc or null",
+      "land_area": "size like 10 Marla or 1 Kanal or null",
       "budget_range": "budget or null"
   }},
   "seller_data": {{
       "ownership_type": "fard_e_wahid or khata_shareek or null",
-      "land_are": "area size or null",
+      "land_area": "area size or null",
       "mouza_location": "mouza/village or null",
       "doc_type": "Registry/Inteqal/Stamp or null",
       "asking_price": "price or null"
@@ -201,6 +231,7 @@ Return this exact JSON structure:
                     lead_id,
                     buyer.get("preferred_location"),
                     buyer.get("property_type"),
+                    buyer.get("land_area"),
                     buyer.get("budget_range"),
                 )
 
@@ -211,7 +242,7 @@ Return this exact JSON structure:
                 save_seller(
                     lead_id,
                     seller.get("ownership_type"),
-                    seller.get("land_are"),
+                    seller.get("land_area"),
                     seller.get("mouza_location"),
                     seller.get("doc_type"),
                     seller.get("asking_price"),
@@ -266,7 +297,28 @@ Return this exact JSON structure:
     except Exception as e:
         print(f"❌ Error during message processing: {e}")
 
+@client.event(LoggedOutEv)
+def on_logged_out(client: NewClient, __: LoggedOutEv):
+    print("⚠️ ALERT: WhatsApp account logged out from device!")
+    # Clear the invalidated auth database so neonize can regenerate a fresh QR on next startup
+    if os.path.exists("auth_info.db"):
+        os.remove("auth_info.db")
+        print("🧹 Cleaned up invalid session file (auth_info.db). Re-run script to pair QR code.")
+
+@client.event(DisconnectedEv)
+def on_disconnected(client: NewClient, __: DisconnectedEv):
+    print("🔌 WhatsApp disconnected from server. Retrying connection...")
 
 if __name__ == "__main__":
-    client.connect()
-    threading.Event().wait()
+    while True:
+        try:
+            print("🔄 Initializing WhatsApp Client...")
+            client.connect()
+            threading.Event().wait()
+        except KeyboardInterrupt:
+            print("🛑 Bot shut down manually.")
+            break
+        except Exception as err:
+            print(f"❌ Connection dropped unexpectedly: {err}")
+            print("⏳ Attempting automatic reconnection in 5 seconds...")
+            time.sleep(5)

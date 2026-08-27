@@ -28,6 +28,26 @@ def format_pk_phone(phone_str: str) -> str:
         return "92" + digits
     return digits
 
+def get_lead_state_payload(lead_id):
+    """Fetches already saved lead, buyer, and seller data from SQLite."""
+    conn = db_connect()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT client_name, phone_number, intent, lead_tag FROM leads WHERE id = ?", (lead_id,))
+    lead = cursor.fetchone()
+    
+    cursor.execute("SELECT preferred_location, property_type, budget_range FROM buyer_preferences WHERE lead_id = ?", (lead_id,))
+    buyer = cursor.fetchone()
+    
+    cursor.execute("SELECT ownership_type, land_area, mouza_location, doc_type, asking_price FROM seller_properties WHERE lead_id = ?", (lead_id,))
+    seller = cursor.fetchone()
+    conn.close()
+
+    return {
+        "lead_info": dict(lead) if lead else {},
+        "buyer_preferences": dict(buyer) if buyer else {},
+        "seller_properties": dict(seller) if seller else {}
+    }
 
 def update_lead_phone(current_lead_id: int, phone_number: str) -> int:
     """Updates or merges lead records when a valid Pakistani phone number is provided."""
@@ -139,6 +159,7 @@ def init_db():
             lead_id INTEGER UNIQUE NOT NULL,
             preferred_location TEXT,
             property_type TEXT,
+            land_area TEXT,
             budget_range TEXT,
             FOREIGN KEY (lead_id) REFERENCES leads (id) ON DELETE CASCADE
         )
@@ -367,7 +388,7 @@ def get_last_matched_property_id(lead_id: int):
     return None
 
 
-def save_buyer(lead_id: int, location: str = None, prop_type: str = None, budget: str = None):
+def save_buyer(lead_id: int, location: str = None, prop_type: str = None, land_area:str = None, budget: str = None):
     con = db_connect()
     cursor = con.cursor()
     cursor.execute("SELECT id FROM buyer_preferences WHERE lead_id = ?", (lead_id,))
@@ -378,10 +399,11 @@ def save_buyer(lead_id: int, location: str = None, prop_type: str = None, budget
             UPDATE buyer_preferences 
             SET preferred_location = COALESCE(?, preferred_location),
                 property_type = COALESCE(?, property_type),
+                land_area = COALESCE(?, land_area),
                 budget_range = COALESCE(?, budget_range)
             WHERE lead_id = ?
         """,
-            (location, prop_type, budget, lead_id),
+            (location, prop_type, land_area, budget, lead_id),
         )
     else:
         cursor.execute(
@@ -405,7 +427,7 @@ def save_seller(lead_id: int, ownership: str = None, area: str = None, mouza: st
             """
             UPDATE seller_properties
             SET ownership_type = COALESCE(?, ownership_type),
-                land_are = COALESCE(?, land_are),
+                land_area = COALESCE(?, land_area),
                 mouza_location = COALESCE(?, mouza_location),
                 doc_type = COALESCE(?, doc_type),
                 asking_price = COALESCE(?, asking_price)
@@ -416,7 +438,7 @@ def save_seller(lead_id: int, ownership: str = None, area: str = None, mouza: st
     else:
         cursor.execute(
             """
-            INSERT INTO seller_properties (lead_id, ownership_type, land_are, mouza_location, doc_type, asking_price)
+            INSERT INTO seller_properties (lead_id, ownership_type, land_area, mouza_location, doc_type, asking_price)
             VALUES (?, ?, ?, ?, ?, ?)
         """,
             (lead_id, ownership, area, mouza, doc_type, price),
@@ -487,7 +509,7 @@ def get_buyer_matches(lead_id):
     p_loc = "location_mouza" if "location_mouza" in prop_cols else ("mouza_location" if "mouza_location" in prop_cols else "NULL")
     p_type = "property_type" if "property_type" in prop_cols else "NULL"
     p_price = "asking_price" if "asking_price" in prop_cols else ("price" if "price" in prop_cols else "NULL")
-    p_area = "land_area" if "land_area" in prop_cols else ("land_are" if "land_are" in prop_cols else "NULL")
+    p_area = "land_area" if "land_area" in prop_cols else ("land_area" if "land_area" in prop_cols else "NULL")
     p_img = "image_url" if "image_url" in prop_cols else "NULL"
 
     prop_query = f"""
