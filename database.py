@@ -119,21 +119,34 @@ def init_db():
     # 1. Added 'BOTH' to CHECK constraint
     cursor.execute(
         """
-        CREATE TABLE IF NOT EXISTS leads(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            phone_number TEXT UNIQUE NOT NULL,
-            client_name TEXT,
-            intent TEXT CHECK(intent IN ('BUY', 'SELL', 'BOTH', 'INQUERY')),
-            lead_tag TEXT CHECK(lead_tag IN ('HOT','WARM','COLD')),
-            is_alerted INTEGER DEFAULT 0,
-            next_contact_date TEXT,
-            lead_stage TEXT DEFAULT 'New Inquiry',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )        
+        CREATE TABLE IF NOT EXISTS leads (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        phone_number TEXT UNIQUE NOT NULL,
+        name TEXT,
+        intent TEXT CHECK(intent IN ('BUYING', 'SELLING', 'HOT LEAD', 'AWAITING INFO')),
+        property_type TEXT,
+        budget_min REAL,
+        budget_max REAL,
+        status TEXT DEFAULT 'NEW',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_interaction TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );        
         """
     )
-
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS activities (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        activity_type TEXT CHECK(activity_type IN ('bot', 'user', 'action')),
+        lead_phone TEXT,
+        description TEXT NOT NULL,
+        highlight_text TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(lead_phone) REFERENCES leads(phone_number)
+        );        
+        """
+    )
+    
     # 2. Changed lead_id type from TEXT to INTEGER UNIQUE
     cursor.execute(
         """
