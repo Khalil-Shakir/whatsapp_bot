@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   LayoutDashboard,
   Users,
@@ -41,6 +41,7 @@ import {
   Building,
   UploadCloud,
   Trash2,
+  Check,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import LeadIntentCard from "@/src/components/LeadIntentCard";
@@ -76,13 +77,13 @@ interface Lead {
   id: number;
   name: string;
   phone: string;
-  intent: "BUYING" | "SELLING";
+  intent: "BUYING" | "SELLING" | "RENT";
   propertyType: string;
   budget: string;
-  status: "HOT LEAD" | "NEW" | "AWAITING INFO";
+  status: "HOT LEAD" | "NEW" | "AWAITING INFO" | "FOLLOW UP" | "CLOSED";
   addedTime: string;
 }
-
+const MAX_ACTIVITIES = 5;
 interface Activity {
   id: number;
   type: "bot" | "user" | "action";
@@ -185,18 +186,11 @@ export default function MalikPropertyDashboard() {
   const [newLeadEmails, setNewLeadEmails] = useState(true);
   const [dailyMatchSummaries, setDailyMatchSummaries] = useState(false);
   const [searchQuery, setSearchQuery] = useState<string>("");
-  // Dropdown filter states
-  const [leadStatusFilterState, setLeadStatusFilterState] =
-    useState<string>("All Statuses");
-  const [intentFilterState, setIntentFilterState] =
-    useState<string>("Buying & Selling");
-  const [propertyTypeFilterState, setPropertyTypeFilterState] =
-    useState<string>("All Types");
   // Filter States for Leads View
-  const [leadStatusFilter] = useState("All Statuses");
-  const [intentFilter] = useState("Buying & Selling");
-  const [propertyTypeFilter] = useState("All Types");
-  const [budgetRangeFilter] = useState("Any Budget");
+  const [leadStatusFilter, setLeadStatusFilter] = useState("All Statuses");
+  const [intentFilter, setIntentFilter] = useState("Buying & Selling");
+  const [propertyTypeFilter, setPropertyTypeFilter] = useState("All Types");
+  const [budgetRangeFilter, setBudgetRangeFilter] = useState("Any Budget");
   //properties
   const [sortOrder, setSortOrder] = useState<"highest" | "lowest">("highest");
   const [matchingPairs, setMatchingPairs] = useState<any[]>([]);
@@ -236,19 +230,21 @@ export default function MalikPropertyDashboard() {
     }
   };
 
-  const fetchBotActivities = async () => {
+  // Fetch initial real activities from SQLite backend
+  const fetchBotActivities = useCallback(async () => {
     try {
       const res = await fetch(
         "http://127.0.0.1:8000/api/dashboard/bot-activities",
       );
       if (res.ok) {
-        const data = await res.json();
-        setActivities(data);
+        const data: Activity[] = await res.json();
+        // Keep only the latest MAX_ACTIVITIES from the DB initially
+        setActivities(data.slice(0, MAX_ACTIVITIES));
       }
     } catch (err) {
       console.error("Failed to fetch bot activities:", err);
     }
-  };
+  }, []);
 
   const fetchPropertyMatches = async () => {
     setLoading(true);
@@ -284,6 +280,54 @@ export default function MalikPropertyDashboard() {
       fetchPropertyMatches();
     }
   }, [activeTab]);
+  useEffect(() => {
+    fetchBotActivities();
+  }, [fetchBotActivities]);
+  useEffect(() => {
+    const ws = new WebSocket("ws://127.0.0.1:8000/ws/activity");
+
+    ws.onmessage = (event) => {
+      // Ignore non-JSON frame checks (e.g., ping/pong frames)
+      if (typeof event.data === "string" && !event.data.startsWith("{")) {
+        return;
+      }
+
+      try {
+        const message = JSON.parse(event.data);
+
+        if (message.event === "NEW_LEAD") {
+          fetchBotActivities();
+        } else if (message.event === "BOT_MESSAGE") {
+          const newActivity: Activity = {
+            id: Date.now(),
+            type: "bot",
+            text: "Bot responded to inquiry from",
+            highlightText: message.name || "Client",
+            targetText: message.message_text
+              ? `"${message.message_text}"`
+              : "via WhatsApp",
+            time: "JUST NOW",
+          };
+
+          // Prepend new activity and drop the oldest item beyond MAX_ACTIVITIES
+          setActivities((prev) =>
+            [newActivity, ...prev].slice(0, MAX_ACTIVITIES),
+          );
+        }
+      } catch (e) {
+        console.error("Error parsing WS payload:", e);
+      }
+    };
+
+    return () => {
+      if (
+        ws.readyState === WebSocket.OPEN ||
+        ws.readyState === WebSocket.CONNECTING
+      ) {
+        ws.close();
+      }
+    };
+  }, [fetchBotActivities]);
 
   //Inventory data
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
@@ -460,15 +504,7 @@ export default function MalikPropertyDashboard() {
     hot_leads: [],
   });
   const [pipeLeads, setPipeLeads] = useState<Lead[]>([]);
-  const [activities, setActivities] = useState<Activity[]>([
-    {
-      id: 1,
-      type: "bot",
-      text: "Bot responded to inquiry from",
-      highlightText: "Client",
-      time: "JUST NOW",
-    },
-  ]);
+  const [activities, setActivities] = useState<Activity[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
@@ -505,37 +541,48 @@ export default function MalikPropertyDashboard() {
 
   const filteredLeads = useMemo(() => {
     return pipeLeads.filter((lead) => {
-      // Search query
-      const matchesSearch =
-        lead.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        lead.phone.includes(searchQuery);
+      // Extract properties safely handling both camelCase and snake_case
+      const leadStatus = lead.status?.toString().toUpperCase() || "";
+      const leadIntent = lead.intent?.toString().toUpperCase() || "";
+      const leadPropType = (lead.propertyType || lead.propertyType || "")
+        .toString()
+        .toLowerCase();
 
-      // Status Filter
+      // 1. Status Filter Check
       const matchesStatus =
         leadStatusFilter === "All Statuses" ||
-        lead.status.toUpperCase() === leadStatusFilter.toUpperCase();
+        leadStatus === leadStatusFilter.toUpperCase();
 
-      // Intent Filter
+      // 2. Intent Filter Check
+      const rawIntent = (lead.intent || "").toString().trim().toUpperCase();
+      const selectedIntent = intentFilter.trim().toUpperCase();
+
       const matchesIntent =
         intentFilter === "Buying & Selling" ||
-        lead.intent.toUpperCase().includes(intentFilter.toUpperCase());
+        intentFilter === "All Intents" ||
+        rawIntent === selectedIntent ||
+        rawIntent.includes(selectedIntent);
 
-      // Property Type Filter
-      const matchesType =
+      // 3. Property Type Check
+      const matchesPropertyType =
         propertyTypeFilter === "All Types" ||
-        lead.propertyType
-          .toLowerCase()
-          .includes(propertyTypeFilter.toLowerCase());
+        leadPropType === propertyTypeFilter.toLowerCase();
 
-      return matchesSearch && matchesStatus && matchesIntent && matchesType;
+      return matchesStatus && matchesIntent && matchesPropertyType;
     });
-  }, [
-    pipeLeads,
-    searchQuery,
+  }, [pipeLeads, leadStatusFilter, intentFilter, propertyTypeFilter]);
+
+  console.log("Active Filters:", {
     leadStatusFilter,
     intentFilter,
     propertyTypeFilter,
-  ]);
+  });
+  console.log(
+    "Sample Lead Fields:",
+    pipeLeads[0]
+      ? { status: pipeLeads[0].status, intent: pipeLeads[0].intent }
+      : "No leads",
+  );
 
   const exportCSV = () => {
     if (pipelineLeads.length === 0) return;
@@ -870,10 +917,10 @@ export default function MalikPropertyDashboard() {
                 </div>
                 <div className="mt-6 flex items-baseline gap-3">
                   <span className="text-4xl font-black text-slate-900 tracking-tight">
-                    {loading ? "..." : formatNumber(metrics?.total_leads)}
+                    {loading ? "..." : formatNumber(metrics?.total_leads ?? 0)}
                   </span>
                   {!loading &&
-                    renderTrendPill(metrics?.total_leads_change ?? 12)}
+                    renderTrendPill(metrics?.total_leads_change ?? 0)}
                 </div>
               </div>
 
@@ -889,7 +936,7 @@ export default function MalikPropertyDashboard() {
                 </div>
                 <div className="mt-6 flex items-baseline gap-3">
                   <span className="text-4xl font-black text-slate-900 tracking-tight">
-                    {loading ? "..." : formatNumber(metrics?.active_chats)}
+                    {loading ? "..." : formatNumber(metrics?.active_chats ?? 0)}
                   </span>
                   {!loading &&
                     renderTrendPill(metrics?.active_chats_change ?? 0)}
@@ -908,10 +955,12 @@ export default function MalikPropertyDashboard() {
                 </div>
                 <div className="mt-6 flex items-baseline gap-3">
                   <span className="text-4xl font-black text-slate-900 tracking-tight">
-                    {loading ? "..." : formatNumber(metrics?.property_matches)}
+                    {loading
+                      ? "..."
+                      : formatNumber(metrics?.property_matches ?? 0)}
                   </span>
                   {!loading &&
-                    renderTrendPill(metrics?.property_matches_change ?? 5)}
+                    renderTrendPill(metrics?.property_matches_change ?? 0)}
                 </div>
               </div>
 
@@ -930,38 +979,53 @@ export default function MalikPropertyDashboard() {
                     {loading ? "..." : `${metrics?.conversion_rate ?? 0}%`}
                   </span>
                   {!loading &&
-                    renderTrendPill(metrics?.conversion_rate_change ?? -2)}
+                    renderTrendPill(metrics?.conversion_rate_change ?? 0)}
                 </div>
               </div>
             </div>
 
             {/* Recent Activity & Intent */}
             <div className="grid grid-cols-3 gap-6">
-              <div className="col-span-2 bg-white rounded-xl border border-slate-200 p-6 shadow-2xs">
-                <h3 className="font-bold text-slate-900 text-base mb-6">
-                  Recent Bot Activity
-                </h3>
-                <div className="space-y-4">
-                  {activities.map((act) => (
-                    <div
-                      key={act.id}
-                      className="flex gap-3 items-start text-xs"
-                    >
-                      <div className="w-2 h-2 rounded-full mt-1 bg-emerald-600 flex-shrink-0" />
-                      <div>
-                        <p className="text-slate-800 leading-relaxed">
-                          {act.text}{" "}
-                          <span className="font-bold text-slate-900">
-                            {act.highlightText}
-                          </span>{" "}
-                          {act.targetText}
-                        </p>
-                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mt-1 block">
-                          {act.time}
-                        </span>
+              {/* Card constrained to fixed height with flex layout */}
+              <div className="col-span-2 h-[360px] bg-white rounded-xl border border-slate-200 p-6 shadow-2xs flex flex-col justify-between">
+                <div className="flex justify-between items-center mb-4 flex-shrink-0">
+                  <h3 className="font-bold text-slate-900 text-base">
+                    Recent Bot Activity
+                  </h3>
+                  <span className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-200/50 px-2 py-0.5 rounded-full">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    Live Updates
+                  </span>
+                </div>
+
+                {/* Inner scroll container with strict scrollbar overflow */}
+                <div className="flex-1 overflow-y-auto pr-1 space-y-3 scroll-smooth">
+                  {activities.length === 0 ? (
+                    <p className="text-xs font-semibold text-slate-400 py-12 text-center">
+                      No recent bot activity recorded.
+                    </p>
+                  ) : (
+                    activities.slice(0, 5).map((act) => (
+                      <div
+                        key={act.id}
+                        className="flex gap-3 items-start text-xs border-b border-slate-100 pb-2.5 last:border-0 last:pb-0 animate-slideDown transition-all duration-300 ease-in-out"
+                      >
+                        <div className="w-2 h-2 rounded-full mt-1 bg-emerald-600 flex-shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-slate-800 leading-snug line-clamp-2">
+                            {act.text}{" "}
+                            <span className="font-bold text-slate-900">
+                              {act.highlightText}
+                            </span>{" "}
+                            {act.targetText}
+                          </p>
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mt-0.5 block">
+                            {act.time}
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    ))
+                  )}
                 </div>
               </div>
 
@@ -989,7 +1053,7 @@ export default function MalikPropertyDashboard() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {metrics.hot_leads.map((lead) => (
+                  {(metrics?.hot_leads ?? []).map((lead) => (
                     <tr
                       key={lead.id}
                       className="hover:bg-slate-50 transition-colors"
@@ -1050,15 +1114,17 @@ export default function MalikPropertyDashboard() {
                 <div className="relative flex items-center">
                   <select
                     value={leadStatusFilter}
-                    onChange={(e) => setLeadStatusFilterState(e.target.value)}
-                    className="w-full text-sm font-bold text-slate-900 bg-transparent pr-6 focus:outline-none cursor-pointer appearance-none"
+                    onChange={(e) => setLeadStatusFilter(e.target.value)}
+                    className="w-full text-xs font-extrabold text-slate-900 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 pr-8 focus:outline-none focus:ring-1 focus:ring-slate-400 appearance-none cursor-pointer transition-colors"
                   >
                     <option value="All Statuses">All Statuses</option>
                     <option value="NEW">New</option>
                     <option value="HOT LEAD">Hot Lead</option>
                     <option value="AWAITING INFO">Awaiting Info</option>
+                    <option value="FOLLOW UP">Follow Up</option>
+                    <option value="CLOSED">Closed</option>
                   </select>
-                  <ChevronDown className="w-4 h-4 text-slate-400 absolute right-0 pointer-events-none" />
+                  <ChevronDown className="w-4 h-4 text-slate-400 absolute right-2.5 pointer-events-none" />
                 </div>
               </div>
 
@@ -1070,14 +1136,17 @@ export default function MalikPropertyDashboard() {
                 <div className="relative flex items-center">
                   <select
                     value={intentFilter}
-                    onChange={(e) => setIntentFilterState(e.target.value)}
-                    className="w-full text-sm font-bold text-slate-900 bg-transparent pr-6 focus:outline-none cursor-pointer appearance-none"
+                    onChange={(e) => setIntentFilter(e.target.value)}
+                    className="w-full text-xs font-extrabold text-slate-900 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 pr-8 focus:outline-none focus:ring-1 focus:ring-slate-400 appearance-none cursor-pointer transition-colors"
                   >
-                    <option value="Buying & Selling">Buying & Selling</option>
-                    <option value="BUY">Buying Only</option>
-                    <option value="SELL">Selling Only</option>
+                    <option value="Buying & Selling">
+                      Buying & Selling (All)
+                    </option>
+                    <option value="BUYING">Buying Only</option>
+                    <option value="SELLING">Selling Only</option>
+                    <option value="RENT">Rent</option>
                   </select>
-                  <ChevronDown className="w-4 h-4 text-slate-400 absolute right-0 pointer-events-none" />
+                  <ChevronDown className="w-4 h-4 text-slate-400 absolute right-2.5 pointer-events-none" />
                 </div>
               </div>
 
@@ -1089,15 +1158,15 @@ export default function MalikPropertyDashboard() {
                 <div className="relative flex items-center">
                   <select
                     value={propertyTypeFilter}
-                    onChange={(e) => setPropertyTypeFilterState(e.target.value)}
-                    className="w-full text-sm font-bold text-slate-900 bg-transparent pr-6 focus:outline-none cursor-pointer appearance-none"
+                    onChange={(e) => setPropertyTypeFilter(e.target.value)}
+                    className="w-full text-xs font-extrabold text-slate-900 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 pr-8 focus:outline-none focus:ring-1 focus:ring-slate-400 appearance-none cursor-pointer transition-colors"
                   >
                     <option value="All Types">All Types</option>
                     <option value="House">House / Villa</option>
                     <option value="Plot">Plot / Land</option>
                     <option value="Commercial">Commercial</option>
                   </select>
-                  <ChevronDown className="w-4 h-4 text-slate-400 absolute right-0 pointer-events-none" />
+                  <ChevronDown className="w-4 h-4 text-slate-400 absolute right-2.5 pointer-events-none" />
                 </div>
               </div>
 
@@ -1107,10 +1176,10 @@ export default function MalikPropertyDashboard() {
                   BUDGET RANGE
                 </span>
                 <div className="relative flex items-center">
-                  <select className="w-full text-sm font-bold text-slate-900 bg-transparent pr-6 focus:outline-none cursor-pointer appearance-none">
+                  <select className="w-full text-xs font-extrabold text-slate-900 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 pr-8 focus:outline-none focus:ring-1 focus:ring-slate-400 appearance-none cursor-pointer transition-colors">
                     <option value="Any Budget">Any Budget</option>
                   </select>
-                  <ChevronDown className="w-4 h-4 text-slate-400 absolute right-0 pointer-events-none" />
+                  <ChevronDown className="w-4 h-4 text-slate-400 absolute right-2.5 pointer-events-none" />
                 </div>
               </div>
             </div>

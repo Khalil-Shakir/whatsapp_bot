@@ -7,6 +7,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Form, File, UploadF
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from datetime import datetime, timedelta
 
 app = FastAPI(title="Malik Property API")
 
@@ -260,27 +261,46 @@ async def create_property(
     except Exception as e:
         print(f"❌ Error saving to inventory database: {str(e)}")
         return {"error": "Failed to add inventory item"}
-
-
 @app.get("/api/dashboard/overview")
 def get_dashboard_overview():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
 
+        # 1. Total leads count
         cursor.execute("SELECT COUNT(*) FROM leads")
         total = cursor.fetchone()[0] or 0
 
-        cursor.execute(
-            "SELECT COUNT(*) FROM leads WHERE UPPER(COALESCE(intent, '')) LIKE '%BUY%'"
-        )
-        buyers = cursor.fetchone()[0] or 0
+        # 2. Dynamic growth calculation (24hr comparison)
+        cursor.execute("""
+            SELECT COUNT(*) FROM leads 
+            WHERE last_interaction >= datetime('now', '-1 day')
+        """)
+        recent_leads = cursor.fetchone()[0] or 0
 
-        cursor.execute(
-            "SELECT COUNT(*) FROM leads WHERE UPPER(COALESCE(intent, '')) LIKE '%SELL%'"
-        )
-        sellers = cursor.fetchone()[0] or 0
+        cursor.execute("""
+            SELECT COUNT(*) FROM leads 
+            WHERE last_interaction >= datetime('now', '-2 day') 
+              AND last_interaction < datetime('now', '-1 day')
+        """)
+        prev_leads = cursor.fetchone()[0] or 0
 
+        if prev_leads > 0:
+            total_leads_change = round(((recent_leads - prev_leads) / prev_leads) * 100, 1)
+        elif recent_leads > 0:
+            total_leads_change = 100.0
+        else:
+            total_leads_change = 0.0
+
+        # 3. Conversion rate calculation
+        cursor.execute("""
+            SELECT COUNT(*) FROM leads 
+            WHERE UPPER(COALESCE(status, '')) IN ('HOT', 'QUALIFIED')
+        """)
+        converted = cursor.fetchone()[0] or 0
+        conversion_rate = round((converted / total * 100), 1) if total > 0 else 0.0
+
+        # 4. Fetch actual Hot Leads records for table
         cursor.execute("""
             SELECT id, name, phone_number, intent, property_type, COALESCE(budget_min, 0) as budget, last_interaction 
             FROM leads 
@@ -291,41 +311,41 @@ def get_dashboard_overview():
 
         hot_leads = []
         for r in rows:
-            hot_leads.append(
-                {
-                    "id": r["id"],
-                    "name": r["name"] or r["phone_number"] or "Lead",
-                    "phone_number": r["phone_number"] or "N/A",
-                    "intent": (r["intent"] or "AWAITING INFO").upper(),
-                    "property_type": r["property_type"] or "Property",
-                    "budget": f"PKR {r['budget']}",
-                    "last_interaction": r["last_interaction"] or "Recently",
-                }
-            )
+            hot_leads.append({
+                "id": r["id"],
+                "name": r["name"] or r["phone_number"] or "Lead",
+                "phone_number": r["phone_number"] or "N/A",
+                "intent": (r["intent"] or "AWAITING INFO").upper(),
+                "property_type": r["property_type"] or "Property",
+                "budget": f"PKR {r['budget']}",
+                "last_interaction": r["last_interaction"] or "Recently",
+            })
 
         return {
             "total_leads": total,
-            "active_chats": total,
+            "total_leads_change": total_leads_change,
+            "active_chats": recent_leads,
+            "active_chats_change": total_leads_change,
             "property_matches": total * 2,
-            "conversion_rate": 100 if total > 0 else 0,
-            "buyers_count": buyers,
-            "sellers_count": sellers,
+            "property_matches_change": round(total_leads_change / 2, 1),
+            "conversion_rate": conversion_rate,
+            "conversion_rate_change": 0.0,
             "hot_leads": hot_leads,
         }
     except Exception as e:
         print(f"❌ Error during /api/dashboard/overview: {str(e)}")
         return {
             "total_leads": 0,
+            "total_leads_change": 0,
             "active_chats": 0,
+            "active_chats_change": 0,
             "property_matches": 0,
+            "property_matches_change": 0,
             "conversion_rate": 0,
-            "buyers_count": 0,
-            "sellers_count": 0,
+            "conversion_rate_change": 0,
             "hot_leads": [],
-            "error": str(e),
         }
-
-
+    
 @app.get("/api/leads")
 def get_all_leads():
     try:
@@ -363,9 +383,17 @@ class BotNotification(BaseModel):
 
 
 @app.post("/api/internal/broadcast-lead")
-async def broadcast_lead_event(data: BotNotification):
-    await manager.broadcast({"event": "NEW_LEAD"})
-    return {"status": "broadcasted"}
+async def broadcast_lead(data: BotNotification):
+    # Broadcast BOT_MESSAGE event with complete details to connected frontend clients
+    await manager.broadcast({
+        "event": "BOT_MESSAGE",
+        "name": data.name or data.phone_number or "Client",
+        "message_text": data.message_text or "Sent a message",
+        "intent": data.intent or "AWAITING INFO",
+        "phone_number": data.phone_number,
+    })
+
+    return {"status": "ok"}
 
 
 @app.websocket("/ws/activity")
@@ -507,6 +535,103 @@ async def send_property_proposal(data: ProposalRequest):
     # Hook into your notification system or WhatsApp automated dispatcher here
     await manager.broadcast({"event": "PROPOSAL_SENT", "pair_id": data.pair_id})
     return {"status": "success", "message": "Proposal dispatched successfully to lead."}
+
+@app.get("/api/dashboard/bot-activities")
+def get_recent_bot_activities():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Query the latest 5 activities directly from SQLite leads table
+        cursor.execute("""
+            SELECT id, name, phone_number, intent, property_type, last_interaction 
+            FROM leads 
+            ORDER BY id DESC 
+            LIMIT 5
+        """)
+        rows = cursor.fetchall()
+        conn.close()
+
+        activities = []
+        for r in rows:
+            lead_name = r["name"] or r["phone_number"] or "Lead"
+            intent = (r["intent"] or "").upper()
+            prop_type = r["property_type"] or "property"
+            time_str = r["last_interaction"] or "Just now"
+
+            if "BUY" in intent:
+                text = "Bot captured buyer inquiry from"
+                target = f"for {prop_type}"
+            elif "SELL" in intent:
+                text = "Bot registered seller listing from"
+                target = f"for {prop_type}"
+            else:
+                text = "Bot logged active conversation with"
+                target = f"regarding {prop_type}"
+
+            activities.append(
+                {
+                    "id": f"db_{r['id']}",
+                    "type": "BOT_RESPONSE",
+                    "text": text,
+                    "highlightText": lead_name,
+                    "targetText": target,
+                    "time": time_str,
+                }
+            )
+
+        return activities
+    except Exception as e:
+        print(f"❌ Error fetching bot activities: {str(e)}")
+        return []@app.get("/api/dashboard/bot-activities")
+def get_recent_bot_activities():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Query the latest 5 activities directly from SQLite leads table
+        cursor.execute("""
+            SELECT id, name, phone_number, intent, property_type, last_interaction 
+            FROM leads 
+            ORDER BY id DESC 
+            LIMIT 5
+        """)
+        rows = cursor.fetchall()
+        conn.close()
+
+        activities = []
+        for r in rows:
+            lead_name = r["name"] or r["phone_number"] or "Lead"
+            intent = (r["intent"] or "").upper()
+            prop_type = r["property_type"] or "property"
+            time_str = r["last_interaction"] or "Just now"
+
+            if "BUY" in intent:
+                text = "Bot captured buyer inquiry from"
+                target = f"for {prop_type}"
+            elif "SELL" in intent:
+                text = "Bot registered seller listing from"
+                target = f"for {prop_type}"
+            else:
+                text = "Bot logged active conversation with"
+                target = f"regarding {prop_type}"
+
+            activities.append(
+                {
+                    "id": f"db_{r['id']}",
+                    "type": "BOT_RESPONSE",
+                    "text": text,
+                    "highlightText": lead_name,
+                    "targetText": target,
+                    "time": time_str,
+                }
+            )
+
+        return activities
+    except Exception as e:
+        print(f"❌ Error fetching bot activities: {str(e)}")
+        return []
+
 
 
 if __name__ == "__main__":

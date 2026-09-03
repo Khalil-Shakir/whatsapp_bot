@@ -58,7 +58,7 @@ def get_lead_state(lead_id: int) -> dict:
 
 
 def sanitize_intent(intent_str: str) -> str:
-    valid_intents = ["BUYING", "SELLING", "HOT LEAD", "AWAITING INFO"]
+    valid_intents = ["BUYING", "SELLING", "RENT"]
     return intent_str if intent_str in valid_intents else "AWAITING INFO"
 
 
@@ -98,7 +98,7 @@ def notify_fastapi_dashboard(phone: str, name: str, intent: str, text: str):
         url = "http://localhost:8000/api/internal/broadcast-lead"
         payload = json.dumps({
             "phone_number": phone,
-            "name": name,
+            "name": name or phone,
             "intent": intent,
             "message_text": text
         }).encode("utf-8")
@@ -106,7 +106,6 @@ def notify_fastapi_dashboard(phone: str, name: str, intent: str, text: str):
         urllib.request.urlopen(req, timeout=2)
     except Exception as e:
         print(f"⚠️ Failed to send WS ping to FastAPI: {e}")
-
 
 @client.event(MessageEv)
 def on_message(client: NewClient, message: MessageEv):
@@ -133,46 +132,45 @@ def on_message(client: NewClient, message: MessageEv):
         current_state = get_lead_state(lead_id)
 
         prompt = f"""
-You are the AI Real Estate Assistant for Malik Property (Mianwali). Your goal is to politely collect property search or selling details while keeping a warm, natural tone in Urdu, Roman Urdu, or English.
+        You are the AI Real Estate Assistant for Malik Property (Mianwali). Your goal is to politely collect property search or selling details while keeping a warm, natural tone in Urdu, Roman Urdu, or English.
 
-CURRENT EXTRACTED CLIENT STATE:
-{json.dumps(current_state, indent=2)}
+        CURRENT EXTRACTED CLIENT STATE:
+        {json.dumps(current_state, indent=2)}
 
-INCOMING MESSAGE: "{text}"
+        INCOMING MESSAGE: "{text}"
 
-==================================================
-DATA EXTRACTION GUIDELINES:
-1. Intent Mapping (MUST be one of these exact values):
-   - "BUYING": Looking to buy/rent property.
-   - "SELLING": Looking to sell property.
-   - "HOT LEAD": Client shows urgent intent or high purchase confidence.
-   - "AWAITING INFO": General questions or missing information.
+        ==================================================
+        DATA EXTRACTION GUIDELINES:
+        1. Intent Mapping (MUST be one of these exact values):
+        - "BUYING": Looking to buy property.
+        - "SELLING": Looking to sell property.
+        - "RENT": Looking to rent property.
 
-2. Fields to Extract:
-   - name: Client's full or first name.
-   - property_type: Commercial, Residential, Plot, House, Agriculture.
-   - budget_min: Minimum budget numeric value (in PKR or raw number).
-   - budget_max: Maximum budget numeric value (in PKR or raw number).
-   - status: Set to "HOT", "CONTACTED", "QUALIFIED", or "NEW".
+        2. Fields to Extract:
+        - name: Client's full or first name.
+        - property_type: Commercial, Residential, Plot, House, Agriculture.
+        - budget_min: Minimum budget numeric value (in PKR, handle "lakh" / "crore" conversions if applicable).
+        - budget_max: Maximum budget numeric value (in PKR, handle "lakh" / "crore" conversions if applicable).
+        - status: Set to "NEW", "HOT LEAD", "AWAITING INFO", "FOLLOW UP", or "CLOSED".
 
-3. Conversational & Language Rules:
-   - DO NOT re-ask details already saved in CURRENT EXTRACTED CLIENT STATE.
-   - Strict Urdu Vocabulary Enforcement:
-     ❌ Banned Words (Hindi): swagat, namaste, kripya, dhanyawad, pranam.
-     ✅ Allowed Equivalents: Khushamdeed, Assalam-o-Alaikum, Meherbani, Shukriya.
+        3. Conversational & Language Rules:
+        - DO NOT re-ask details already saved in CURRENT EXTRACTED CLIENT STATE.
+        - Strict Urdu Vocabulary Enforcement:
+            ❌ Banned Words (Hindi): swagat, namaste, kripya, dhanyawad, pranam.
+            ✅ Allowed Equivalents: Khushamdeed, Assalam-o-Alaikum, Meherbani, Shukriya.
 
-==================================================
-Return ONLY raw JSON object (no markdown, no ```json formatting):
-{{
-  "reply": "Your response to the user asking missing information or acknowledging details.",
-  "name": "extracted name or null",
-  "intent": "BUYING or SELLING or HOT LEAD or AWAITING INFO",
-  "property_type": "Plot/House/Commercial/etc or null",
-  "budget_min": float number or null,
-  "budget_max": float number or null,
-  "status": "NEW or QUALIFIED or HOT or null"
-}}
-"""
+        ==================================================
+        Return ONLY a raw JSON object (no markdown, no ```json formatting):
+        {{
+        "reply": "Your response to the user asking for missing information or acknowledging details.",
+        "name": "extracted name or null",
+        "intent": "BUYING | SELLING | RENT,
+        "property_type": "Plot/House/Commercial/etc or null",
+        "budget_min": float number or null,
+        "budget_max": float number or null,
+        "status": "NEW | HOT LEAD | AWAITING INFO | FOLLOW UP | CLOSED | null"
+        }}
+        """
 
         try:
             chat_completion = groq_client.chat.completions.create(
@@ -217,7 +215,7 @@ Return ONLY raw JSON object (no markdown, no ```json formatting):
         # Broadcast update to FastAPI WS Dashboard
         notify_fastapi_dashboard(
             phone=clean_phone,
-            name=data.get("name"),
+            name=data.get("name") or current_state.get("name") or clean_phone,
             intent=clean_intent,
             text=text
         )
