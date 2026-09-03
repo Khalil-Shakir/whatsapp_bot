@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   LayoutDashboard,
   Users,
@@ -82,7 +82,7 @@ interface Lead {
   status: "HOT LEAD" | "NEW" | "AWAITING INFO";
   addedTime: string;
 }
-
+const MAX_ACTIVITIES = 5;
 interface Activity {
   id: number;
   type: "bot" | "user" | "action";
@@ -236,19 +236,21 @@ export default function MalikPropertyDashboard() {
     }
   };
 
-  const fetchBotActivities = async () => {
+  // Fetch initial real activities from SQLite backend
+  const fetchBotActivities = useCallback(async () => {
     try {
       const res = await fetch(
         "http://127.0.0.1:8000/api/dashboard/bot-activities",
       );
       if (res.ok) {
-        const data = await res.json();
-        setActivities(data);
+        const data: Activity[] = await res.json();
+        // Keep only the latest MAX_ACTIVITIES from the DB initially
+        setActivities(data.slice(0, MAX_ACTIVITIES));
       }
     } catch (err) {
       console.error("Failed to fetch bot activities:", err);
     }
-  };
+  }, []);
 
   const fetchPropertyMatches = async () => {
     setLoading(true);
@@ -284,6 +286,54 @@ export default function MalikPropertyDashboard() {
       fetchPropertyMatches();
     }
   }, [activeTab]);
+  useEffect(() => {
+    fetchBotActivities();
+  }, [fetchBotActivities]);
+  useEffect(() => {
+    const ws = new WebSocket("ws://127.0.0.1:8000/ws/activity");
+
+    ws.onmessage = (event) => {
+      // Ignore non-JSON frame checks (e.g., ping/pong frames)
+      if (typeof event.data === "string" && !event.data.startsWith("{")) {
+        return;
+      }
+
+      try {
+        const message = JSON.parse(event.data);
+
+        if (message.event === "NEW_LEAD") {
+          fetchBotActivities();
+        } else if (message.event === "BOT_MESSAGE") {
+          const newActivity: Activity = {
+            id: Date.now(),
+            type: "bot",
+            text: "Bot responded to inquiry from",
+            highlightText: message.name || "Client",
+            targetText: message.message_text
+              ? `"${message.message_text}"`
+              : "via WhatsApp",
+            time: "JUST NOW",
+          };
+
+          // Prepend new activity and drop the oldest item beyond MAX_ACTIVITIES
+          setActivities((prev) =>
+            [newActivity, ...prev].slice(0, MAX_ACTIVITIES),
+          );
+        }
+      } catch (e) {
+        console.error("Error parsing WS payload:", e);
+      }
+    };
+
+    return () => {
+      if (
+        ws.readyState === WebSocket.OPEN ||
+        ws.readyState === WebSocket.CONNECTING
+      ) {
+        ws.close();
+      }
+    };
+  }, [fetchBotActivities]);
 
   //Inventory data
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
@@ -460,15 +510,7 @@ export default function MalikPropertyDashboard() {
     hot_leads: [],
   });
   const [pipeLeads, setPipeLeads] = useState<Lead[]>([]);
-  const [activities, setActivities] = useState<Activity[]>([
-    {
-      id: 1,
-      type: "bot",
-      text: "Bot responded to inquiry from",
-      highlightText: "Client",
-      time: "JUST NOW",
-    },
-  ]);
+  const [activities, setActivities] = useState<Activity[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
@@ -937,31 +979,46 @@ export default function MalikPropertyDashboard() {
 
             {/* Recent Activity & Intent */}
             <div className="grid grid-cols-3 gap-6">
-              <div className="col-span-2 bg-white rounded-xl border border-slate-200 p-6 shadow-2xs">
-                <h3 className="font-bold text-slate-900 text-base mb-6">
-                  Recent Bot Activity
-                </h3>
-                <div className="space-y-4">
-                  {activities.map((act) => (
-                    <div
-                      key={act.id}
-                      className="flex gap-3 items-start text-xs"
-                    >
-                      <div className="w-2 h-2 rounded-full mt-1 bg-emerald-600 flex-shrink-0" />
-                      <div>
-                        <p className="text-slate-800 leading-relaxed">
-                          {act.text}{" "}
-                          <span className="font-bold text-slate-900">
-                            {act.highlightText}
-                          </span>{" "}
-                          {act.targetText}
-                        </p>
-                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mt-1 block">
-                          {act.time}
-                        </span>
+              {/* Card constrained to fixed height with flex layout */}
+              <div className="col-span-2 h-[360px] bg-white rounded-xl border border-slate-200 p-6 shadow-2xs flex flex-col justify-between">
+                <div className="flex justify-between items-center mb-4 flex-shrink-0">
+                  <h3 className="font-bold text-slate-900 text-base">
+                    Recent Bot Activity
+                  </h3>
+                  <span className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-200/50 px-2 py-0.5 rounded-full">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    Live Updates
+                  </span>
+                </div>
+
+                {/* Inner scroll container with strict scrollbar overflow */}
+                <div className="flex-1 overflow-y-auto pr-1 space-y-3 scroll-smooth">
+                  {activities.length === 0 ? (
+                    <p className="text-xs font-semibold text-slate-400 py-12 text-center">
+                      No recent bot activity recorded.
+                    </p>
+                  ) : (
+                    activities.slice(0, 5).map((act) => (
+                      <div
+                        key={act.id}
+                        className="flex gap-3 items-start text-xs border-b border-slate-100 pb-2.5 last:border-0 last:pb-0 animate-slideDown transition-all duration-300 ease-in-out"
+                      >
+                        <div className="w-2 h-2 rounded-full mt-1 bg-emerald-600 flex-shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-slate-800 leading-snug line-clamp-2">
+                            {act.text}{" "}
+                            <span className="font-bold text-slate-900">
+                              {act.highlightText}
+                            </span>{" "}
+                            {act.targetText}
+                          </p>
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mt-0.5 block">
+                            {act.time}
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    ))
+                  )}
                 </div>
               </div>
 

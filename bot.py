@@ -98,7 +98,7 @@ def notify_fastapi_dashboard(phone: str, name: str, intent: str, text: str):
         url = "http://localhost:8000/api/internal/broadcast-lead"
         payload = json.dumps({
             "phone_number": phone,
-            "name": name,
+            "name": name or phone,
             "intent": intent,
             "message_text": text
         }).encode("utf-8")
@@ -106,7 +106,6 @@ def notify_fastapi_dashboard(phone: str, name: str, intent: str, text: str):
         urllib.request.urlopen(req, timeout=2)
     except Exception as e:
         print(f"⚠️ Failed to send WS ping to FastAPI: {e}")
-
 
 @client.event(MessageEv)
 def on_message(client: NewClient, message: MessageEv):
@@ -217,7 +216,7 @@ Return ONLY raw JSON object (no markdown, no ```json formatting):
         # Broadcast update to FastAPI WS Dashboard
         notify_fastapi_dashboard(
             phone=clean_phone,
-            name=data.get("name"),
+            name=data.get("name") or current_state.get("name") or clean_phone,
             intent=clean_intent,
             text=text
         )

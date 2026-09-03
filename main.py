@@ -363,9 +363,17 @@ class BotNotification(BaseModel):
 
 
 @app.post("/api/internal/broadcast-lead")
-async def broadcast_lead_event(data: BotNotification):
-    await manager.broadcast({"event": "NEW_LEAD"})
-    return {"status": "broadcasted"}
+async def broadcast_lead(data: BotNotification):
+    # Broadcast BOT_MESSAGE event with complete details to connected frontend clients
+    await manager.broadcast({
+        "event": "BOT_MESSAGE",
+        "name": data.name or data.phone_number or "Client",
+        "message_text": data.message_text or "Sent a message",
+        "intent": data.intent or "AWAITING INFO",
+        "phone_number": data.phone_number,
+    })
+
+    return {"status": "ok"}
 
 
 @app.websocket("/ws/activity")
@@ -507,6 +515,103 @@ async def send_property_proposal(data: ProposalRequest):
     # Hook into your notification system or WhatsApp automated dispatcher here
     await manager.broadcast({"event": "PROPOSAL_SENT", "pair_id": data.pair_id})
     return {"status": "success", "message": "Proposal dispatched successfully to lead."}
+
+@app.get("/api/dashboard/bot-activities")
+def get_recent_bot_activities():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Query the latest 5 activities directly from SQLite leads table
+        cursor.execute("""
+            SELECT id, name, phone_number, intent, property_type, last_interaction 
+            FROM leads 
+            ORDER BY id DESC 
+            LIMIT 5
+        """)
+        rows = cursor.fetchall()
+        conn.close()
+
+        activities = []
+        for r in rows:
+            lead_name = r["name"] or r["phone_number"] or "Lead"
+            intent = (r["intent"] or "").upper()
+            prop_type = r["property_type"] or "property"
+            time_str = r["last_interaction"] or "Just now"
+
+            if "BUY" in intent:
+                text = "Bot captured buyer inquiry from"
+                target = f"for {prop_type}"
+            elif "SELL" in intent:
+                text = "Bot registered seller listing from"
+                target = f"for {prop_type}"
+            else:
+                text = "Bot logged active conversation with"
+                target = f"regarding {prop_type}"
+
+            activities.append(
+                {
+                    "id": f"db_{r['id']}",
+                    "type": "BOT_RESPONSE",
+                    "text": text,
+                    "highlightText": lead_name,
+                    "targetText": target,
+                    "time": time_str,
+                }
+            )
+
+        return activities
+    except Exception as e:
+        print(f"❌ Error fetching bot activities: {str(e)}")
+        return []@app.get("/api/dashboard/bot-activities")
+def get_recent_bot_activities():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Query the latest 5 activities directly from SQLite leads table
+        cursor.execute("""
+            SELECT id, name, phone_number, intent, property_type, last_interaction 
+            FROM leads 
+            ORDER BY id DESC 
+            LIMIT 5
+        """)
+        rows = cursor.fetchall()
+        conn.close()
+
+        activities = []
+        for r in rows:
+            lead_name = r["name"] or r["phone_number"] or "Lead"
+            intent = (r["intent"] or "").upper()
+            prop_type = r["property_type"] or "property"
+            time_str = r["last_interaction"] or "Just now"
+
+            if "BUY" in intent:
+                text = "Bot captured buyer inquiry from"
+                target = f"for {prop_type}"
+            elif "SELL" in intent:
+                text = "Bot registered seller listing from"
+                target = f"for {prop_type}"
+            else:
+                text = "Bot logged active conversation with"
+                target = f"regarding {prop_type}"
+
+            activities.append(
+                {
+                    "id": f"db_{r['id']}",
+                    "type": "BOT_RESPONSE",
+                    "text": text,
+                    "highlightText": lead_name,
+                    "targetText": target,
+                    "time": time_str,
+                }
+            )
+
+        return activities
+    except Exception as e:
+        print(f"❌ Error fetching bot activities: {str(e)}")
+        return []
+
 
 
 if __name__ == "__main__":
