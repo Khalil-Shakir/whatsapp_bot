@@ -42,6 +42,10 @@ import {
   UploadCloud,
   Trash2,
   Check,
+  QrCode,
+  Wifi,
+  WifiOff,
+  Loader2,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import LeadIntentCard from "@/src/components/LeadIntentCard";
@@ -191,6 +195,10 @@ export default function MalikPropertyDashboard() {
   const [intentFilter, setIntentFilter] = useState("Buying & Selling");
   const [propertyTypeFilter, setPropertyTypeFilter] = useState("All Types");
   const [budgetRangeFilter, setBudgetRangeFilter] = useState("Any Budget");
+  //QR
+  const [status, setStatus] = useState("DISCONNECTED"); // "CONNECTED" | "NEEDS_QR" | "DISCONNECTED"
+  const [qrCode, setQrCode] = useState(null);
+  const [isConnectedWS, setIsConnectedWS] = useState(false);
   //properties
   const [sortOrder, setSortOrder] = useState<"highest" | "lowest">("highest");
   const [matchingPairs, setMatchingPairs] = useState<any[]>([]);
@@ -213,7 +221,7 @@ export default function MalikPropertyDashboard() {
     setSendingProposalId(pairId);
     try {
       const res = await fetch(
-        "http://127.0.0.1:8000/api/property-matches/send-proposal",
+        `${API_BASE_URL}/api/property-matches/send-proposal`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -233,31 +241,49 @@ export default function MalikPropertyDashboard() {
   // Fetch initial real activities from SQLite backend
   const fetchBotActivities = useCallback(async () => {
     try {
-      const res = await fetch(
-        "http://127.0.0.1:8000/api/dashboard/bot-activities",
-      );
+      const res = await fetch(`${API_BASE_URL}/api/dashboard/bot-activities`);
       if (res.ok) {
         const data: Activity[] = await res.json();
-        // Keep only the latest MAX_ACTIVITIES from the DB initially
-        setActivities(data.slice(0, MAX_ACTIVITIES));
+        setActivities(data);
       }
     } catch (err) {
-      console.error("Failed to fetch bot activities:", err);
+      // Catch network drops smoothly without breaking UI state
+      console.warn(
+        "Backend API not reachable at http://localhost:8000. Retrying via WebSocket...",
+      );
     }
   }, []);
+  const [botStatus, setBotStatus] = useState<string>("DISCONNECTED");
 
+  useEffect(() => {
+    const ws = new WebSocket("ws://127.0.0.1:8000/ws/bot-status");
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === "STATE_UPDATE") {
+          setBotStatus(data.status);
+          setQrCode(data.qr_code);
+        }
+      } catch (err) {
+        console.error("WS message error:", err);
+      }
+    };
+
+    return () => ws.close();
+  }, []);
   const fetchPropertyMatches = async () => {
     setLoading(true);
     try {
       // Calls your new FastAPI backend matching endpoint
-      const res = await fetch("http://127.0.0.1:8000/api/property-matches");
+      const res = await fetch(`${API_BASE_URL}/api/property-matches`);
       if (res.ok) {
         const data = await res.json();
         setMatchingPairs(data);
       }
 
       // Calls inventory endpoint to populate "Highly Demanded Listings"
-      const invRes = await fetch("http://127.0.0.1:8000/api/inventory");
+      const invRes = await fetch(`${API_BASE_URL}/api/inventory`);
       if (invRes.ok) {
         const invData = await invRes.json();
         setDemandedListings(
@@ -280,11 +306,59 @@ export default function MalikPropertyDashboard() {
       fetchPropertyMatches();
     }
   }, [activeTab]);
+
+  //qr
+  useEffect(() => {
+    let ws: WebSocket | null = null;
+    let reconnectTimer: NodeJS.Timeout;
+
+    const connect = () => {
+      // FIX: Match exact host localhost:8000
+      ws = new WebSocket(`${WS_BASE_URL}/ws/bot-status`);
+
+      ws.onopen = () => {
+        console.log("⚡ WebSocket connected to activity feed");
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === "STATE_UPDATE") {
+            setStatus(data.status);
+            setQrCode(data.qr_code);
+            if (data.activities) setActivities(data.activities);
+          }
+          if (data.type === "NEW_ACTIVITY") {
+            setActivities((prev) => [data.activity, ...prev].slice(0, 20));
+          }
+        } catch (err) {
+          console.error("Error parsing WS data:", err);
+        }
+      };
+
+      ws.onclose = () => {
+        // Reconnect after 3 seconds if disconnected
+        reconnectTimer = setTimeout(connect, 3000);
+      };
+
+      ws.onerror = () => {
+        // Keep console clean
+      };
+    };
+
+    connect();
+
+    return () => {
+      clearTimeout(reconnectTimer);
+      if (ws) ws.close();
+    };
+  }, []);
+
   useEffect(() => {
     fetchBotActivities();
   }, [fetchBotActivities]);
   useEffect(() => {
-    const ws = new WebSocket("ws://127.0.0.1:8000/ws/activity");
+    const ws = new WebSocket("ws://127.0.0.1:8000/ws/bot-status");
 
     ws.onmessage = (event) => {
       // Ignore non-JSON frame checks (e.g., ping/pong frames)
@@ -329,6 +403,8 @@ export default function MalikPropertyDashboard() {
     };
   }, [fetchBotActivities]);
 
+  const API_BASE_URL = "http://localhost:8000";
+  const WS_BASE_URL = "ws://localhost:8000";
   //Inventory data
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
@@ -354,15 +430,13 @@ export default function MalikPropertyDashboard() {
 
   const fetchInventory = async () => {
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/inventory");
+      const res = await fetch(`${API_BASE_URL}/api/inventory`);
       if (res.ok) {
         const data = await res.json();
         setInventory(data);
       }
     } catch (err) {
-      console.error("Failed to fetch inventory:", err);
-    } finally {
-      setLoading(false);
+      console.warn("Could not connect to inventory API at 127.0.0.1:8000.");
     }
   };
 
@@ -464,9 +538,9 @@ export default function MalikPropertyDashboard() {
         formData.append("file", selectedFile);
       }
 
-      const response = await fetch("http://127.0.0.1:8000/api/inventory", {
+      const response = await fetch(`${API_BASE_URL}/api/inventory`, {
         method: "POST",
-        body: formData, // Browser automatically sets 'multipart/form-data' header
+        body: formData, // Browser automatically sets `multipart/form-data` header
       });
 
       if (response.ok) {
@@ -641,7 +715,7 @@ export default function MalikPropertyDashboard() {
 
     const connectWebSocket = () => {
       // Explicitly use 127.0.0.1 instead of localhost to prevent IPv6 lookup drops
-      socket = new WebSocket("ws://127.0.0.1:8000/ws/activity");
+      socket = new WebSocket("ws://127.0.0.1:8000/ws/bot-status");
 
       socket.onopen = () => {
         console.log("⚡ WebSocket connected to activity feed");
@@ -997,6 +1071,30 @@ export default function MalikPropertyDashboard() {
                     Live Updates
                   </span>
                 </div>
+                {/* QR Code Scan Banner / Modal */}
+                {botStatus === "NEEDS_QR" && qrCode && (
+                  <div className="mb-6 p-6 bg-white border border-yellow-200 rounded-xl shadow-lg flex flex-col md:flex-row items-center justify-between gap-6">
+                    <div>
+                      <span className="px-3 py-1 bg-yellow-100 text-yellow-800 text-xs font-semibold rounded-full">
+                        Action Required
+                      </span>
+                      <h3 className="text-xl font-bold mt-2 text-gray-900">
+                        Scan QR Code to Connect Bot
+                      </h3>
+                      <p className="text-sm text-gray-600 mt-1">
+                        Open WhatsApp on your phone &gt; Settings &gt; Linked
+                        Devices &gt; Link a Device and scan this QR code.
+                      </p>
+                    </div>
+                    <div className="bg-gray-50 p-3 rounded-lg border">
+                      <img
+                        src={qrCode}
+                        alt="WhatsApp QR Code"
+                        className="w-48 h-48 object-contain"
+                      />
+                    </div>
+                  </div>
+                )}
 
                 {/* Inner scroll container with strict scrollbar overflow */}
                 <div className="flex-1 overflow-y-auto pr-1 space-y-3 scroll-smooth">
@@ -1005,9 +1103,12 @@ export default function MalikPropertyDashboard() {
                       No recent bot activity recorded.
                     </p>
                   ) : (
-                    activities.slice(0, 5).map((act) => (
+                    activities.slice(0, 5).map((act, index) => (
                       <div
-                        key={act.id}
+                        key={
+                          act.id ||
+                          `act-${index}-${act.timestamp || Date.now()}`
+                        }
                         className="flex gap-3 items-start text-xs border-b border-slate-100 pb-2.5 last:border-0 last:pb-0 animate-slideDown transition-all duration-300 ease-in-out"
                       >
                         <div className="w-2 h-2 rounded-full mt-1 bg-emerald-600 flex-shrink-0" />
