@@ -453,7 +453,6 @@ def get_all_leads():
     except Exception as e:
         print(f"❌ Error during /api/leads: {str(e)}")
         return []
-
 @app.get("/api/leads")
 async def get_leads():
     try:
@@ -463,58 +462,19 @@ async def get_leads():
         rows = cursor.fetchall()
         conn.close()
 
-        leads = []
-        for r in rows:
-            keys = r.keys()
-
-            # Handle phone vs phone_number
-            phone = (
-                r["phone_number"]
-                if "phone_number" in keys
-                else (r["phone"] if "phone" in keys else "N/A")
-            )
-
-            # Format budget from budget_min / budget_max or fallback to budget
-            if "budget_min" in keys and r["budget_min"] is not None:
-                budget = f"PKR {r['budget_min']:,.0f}"
-                if (
-                    "budget_max" in keys
-                    and r["budget_max"] is not None
-                    and r["budget_max"] != r["budget_min"]
-                ):
-                    budget += f" - {r['budget_max']:,.0f}"
-            else:
-                budget = r["budget"] if "budget" in keys and r["budget"] else "N/A"
-
-            # Handle last_interaction / created_at / added_time
-            added_time = (
-                r["last_interaction"]
-                if "last_interaction" in keys and r["last_interaction"]
-                else (
-                    r["created_at"]
-                    if "created_at" in keys and r["created_at"]
-                    else (
-                        r["added_time"]
-                        if "added_time" in keys and r["added_time"]
-                        else "Recently"
-                    )
-                )
-            )
-
-            leads.append(
-                {
-                    "id": r["id"],
-                    "name": r["name"] or phone or "Unknown",
-                    "phone": phone,
-                    "intent": (r["intent"] or "AWAITING INFO").upper(),
-                    "propertyType": r["property_type"] or "N/A",
-                    "budget": budget,
-                    "status": (r["status"] or "NEW").upper(),
-                    "addedTime": added_time,
-                }
-            )
-
-        return leads
+        return [
+            {
+                "id": r["id"],
+                "name": r["name"] or "Unknown",
+                "phone": r["phone"] or "",
+                "intent": r["intent"] or "BUYING",
+                "propertyType": r["property_type"] or "House",
+                "budget": r["budget"] or "N/A",
+                "status": r["status"] or "NEW",
+                "addedTime": r["added_time"] or "Recently"
+            }
+            for r in rows
+        ]
     except Exception as e:
         logger.error(f"Error fetching leads: {e}")
         return []
