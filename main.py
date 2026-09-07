@@ -41,6 +41,9 @@ app = FastAPI(title="Malik Property Automation API", lifespan=lifespan)
 class UpdateStatusPayload(BaseModel):
     status: str
 
+class ToggleBotPayload(BaseModel):
+    enabled: bool
+
 @app.patch("/api/leads/{lead_id}/status")
 async def update_lead_status(lead_id: int, payload: UpdateStatusPayload):
     # Standardize incoming status string
@@ -70,6 +73,28 @@ async def update_lead_status(lead_id: int, payload: UpdateStatusPayload):
     })
 
     return {"status": "success", "lead_id": lead_id, "new_status": new_status}
+
+@app.patch("/api/leads/{lead_id}/toggle-bot")
+async def toggle_lead_bot(lead_id: int, payload: ToggleBotPayload):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE leads SET bot_enabled = ? WHERE id = ?", (1 if payload.enabled else 0, lead_id))
+    conn.commit()
+    
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Lead not found")
+        
+    conn.close()
+
+    await state_manager.add_activity({
+        "type": "action",
+        "text": f"Bot {'enabled' if payload.enabled else 'disabled'} for Lead #{lead_id}",
+        "highlightText": "STATUS UPDATE",
+        "time": "JUST NOW"
+    })
+
+    return {"status": "success", "lead_id": lead_id, "bot_enabled": payload.enabled}
 
 
 app.add_middleware(
@@ -541,6 +566,7 @@ async def get_leads():
                     "propertyType": r["property_type"] or "N/A",
                     "budget": budget,
                     "status": (r["status"] or "NEW").upper(),
+                    "botEnabled": bool(r["bot_enabled"]) if "bot_enabled" in keys and r["bot_enabled"] is not None else True,
                     "addedTime": added_time,
                 }
             )
@@ -636,6 +662,17 @@ def update_lead(
     conn.close()
 
 
+def is_bot_enabled_for_lead(lead_id: int) -> bool:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT bot_enabled FROM leads WHERE id = ?", (lead_id,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if row and row["bot_enabled"] is not None:
+        return bool(row["bot_enabled"])
+    return True # Default to enabled if not explicitly set
+
 @client.event(MessageEv)
 def on_message(client: NewClient, message: MessageEv):
     if message.Info.MessageSource.IsFromMe:
@@ -674,6 +711,9 @@ def on_message(client: NewClient, message: MessageEv):
     )
     try:
         lead_id = get_create_lead(clean_phone)
+        if not is_bot_enabled_for_lead(lead_id):
+            print(f"⏸️ Bot is paused for lead #{lead_id} ({clean_phone}). Skipping AI response.")
+            return
         current_state = get_lead_state(lead_id)
 
         prompt = f"""

@@ -16,11 +16,16 @@ CREATE TABLE IF NOT EXISTS leads (
     property_type TEXT,
     budget_min REAL,
     budget_max REAL,
-    status TEXT DEFAULT 'NEW' CHECK(status IN ('NEW', 'FOLLOW UP', 'HOT LEAD',  'CLOSED')),
+    status TEXT DEFAULT 'NEW' CHECK(status IN ('NEW', 'FOLLOW UP',  'CLOSED')),
+    bot_enabled INTEGER DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_interaction TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """)
+try:
+    cursor.execute("ALTER TABLE leads ADD COLUMN bot_enabled INTEGER DEFAULT 1")
+except sqlite3.OperationalError:
+    pass  # Column already exists
 
 cursor.execute("""
         CREATE TABLE IF NOT EXISTS inventory (

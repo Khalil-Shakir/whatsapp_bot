@@ -85,6 +85,7 @@ interface Lead {
   propertyType: string;
   budget: string;
   status: "NEW" | "FOLLOW UP" | "CLOSED";
+  botEnabled?: boolean;
   addedTime: string;
 }
 const MAX_ACTIVITIES = 4;
@@ -236,6 +237,40 @@ export default function MalikPropertyDashboard() {
     } finally {
       setSendingProposalId(null);
     }
+  };
+
+  //bot
+  const handleToggleBot = async (leadId: number, currentStatus: boolean) => {
+    const nextStatus = !currentStatus;
+
+    // Optimistic UI update
+    setPipeLeads((prev) =>
+      prev.map((l) => (l.id === leadId ? { ...l, botEnabled: nextStatus } : l)),
+    );
+
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/leads/${leadId}/toggle-bot`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: nextStatus }),
+        },
+      );
+
+      if (!res.ok) fetchLeads(); // Revert on error
+    } catch (err) {
+      console.error("Failed to toggle bot:", err);
+      fetchLeads();
+    }
+  };
+
+  const handleOpenWhatsApp = (phone: string) => {
+    const cleanNumber = phone.replace(/\D/g, "");
+    const formattedPhone = cleanNumber.startsWith("0")
+      ? `92${cleanNumber.slice(1)}`
+      : cleanNumber;
+    window.open(`https://wa.me/${formattedPhone}`, "_blank");
   };
 
   // Fetch initial real activities from SQLite backend
@@ -1447,6 +1482,38 @@ export default function MalikPropertyDashboard() {
                       <p className="text-[10px] font-semibold text-slate-400 mt-1">
                         {lead.addedTime}
                       </p>
+                    </div>
+
+                    <div className="col-span-1 flex items-center justify-end gap-2">
+                      {/* WhatsApp Direct Action */}
+                      <button
+                        onClick={() => handleOpenWhatsApp(lead.phone)}
+                        title="Open WhatsApp Chat"
+                        className="p-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 transition-colors"
+                      >
+                        <MessageSquare className="w-4 h-4" />
+                      </button>
+
+                      {/* Start / Stop Bot Action */}
+                      <button
+                        onClick={() =>
+                          handleToggleBot(lead.id, lead.botEnabled ?? true)
+                        }
+                        title={
+                          (lead.botEnabled ?? true) ? "Pause Bot" : "Start Bot"
+                        }
+                        className={`p-2 rounded-lg transition-colors ${
+                          (lead.botEnabled ?? true)
+                            ? "bg-slate-100 hover:bg-rose-50 text-slate-700 hover:text-rose-600"
+                            : "bg-amber-100 hover:bg-emerald-50 text-amber-800 hover:text-emerald-700"
+                        }`}
+                      >
+                        {(lead.botEnabled ?? true) ? (
+                          <Wifi className="w-4 h-4" />
+                        ) : (
+                          <WifiOff className="w-4 h-4" />
+                        )}
+                      </button>
                     </div>
 
                     <div className="col-span-1 text-right"></div>
