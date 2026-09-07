@@ -12,11 +12,11 @@ CREATE TABLE IF NOT EXISTS leads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     phone_number TEXT UNIQUE NOT NULL,
     name TEXT,
-    intent TEXT CHECK(intent IN ('BUYING', 'SELLING', 'RENT')),
+    intent TEXT CHECK(intent IN ('BUYING', 'SELLING', 'RENT', 'AWAITING INFO')),
     property_type TEXT,
     budget_min REAL,
     budget_max REAL,
-    status TEXT DEFAULT 'NEW' CHECK(status IN ('NEW', 'HOT LEAD', 'AWAITING INFO', 'FOLLOW UP', 'CLOSED')),
+    status TEXT DEFAULT 'NEW' CHECK(status IN ('NEW', 'FOLLOW UP', 'HOT LEAD',  'CLOSED')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_interaction TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

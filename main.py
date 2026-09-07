@@ -9,12 +9,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime
-import json, asyncio, qrcode, io, base64
+import json, asyncio, qrcode, io, base64, time
 from neonize.client import NewClient
 from neonize.events import ConnectedEv, DisconnectedEv, MessageEv
 from contextlib import asynccontextmanager
 import urllib.request
 from groq import Groq
+from fastapi import HTTPException
 
 
 logging.basicConfig(level=logging.INFO)
@@ -36,14 +37,44 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Malik Property Automation API", lifespan=lifespan)
 
+
+class UpdateStatusPayload(BaseModel):
+    status: str
+
+@app.patch("/api/leads/{lead_id}/status")
+async def update_lead_status(lead_id: int, payload: UpdateStatusPayload):
+    # Standardize incoming status string
+    valid_statuses = ["NEW", "FOLLOW UP",  "HOT LEAD", "CLOSED"]
+    new_status = payload.status.upper()
+    
+    if new_status not in valid_statuses:
+        raise HTTPException(status_code=400, detail="Invalid status value")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE leads SET status = ? WHERE id = ?", (new_status, lead_id))
+    conn.commit()
+    
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Lead not found")
+        
+    conn.close()
+
+    # Broadcast real-time update via WebSocket state manager
+    await state_manager.add_activity({
+        "type": "action",
+        "text": f"Lead #{lead_id} status updated to",
+        "highlightText": new_status,
+        "time": "JUST NOW"
+    })
+
+    return {"status": "success", "lead_id": lead_id, "new_status": new_status}
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -665,7 +696,7 @@ def on_message(client: NewClient, message: MessageEv):
         - property_type: Commercial, Residential, Plot, House, Agriculture.
         - budget_min: Minimum budget numeric value (in PKR, handle "lakh" / "crore" conversions if applicable).
         - budget_max: Maximum budget numeric value (in PKR, handle "lakh" / "crore" conversions if applicable).
-        - status: Set to "NEW", "FOLLOW UP", or "CLOSED".
+        - status: Set to "NEW", "FOLLOW UP", "HOT LEAD", or "CLOSED".
 
         3. Conversational & Language Rules:
         - DO NOT re-ask details already saved in CURRENT EXTRACTED CLIENT STATE.
@@ -682,7 +713,7 @@ def on_message(client: NewClient, message: MessageEv):
         "property_type": "Plot/House/Commercial/etc or null",
         "budget_min": float number or null,
         "budget_max": float number or null,
-        "status": "NEW | FOLLOW UP | CLOSED | null"
+        "status": "NEW | FOLLOW UP | HOT LEAD | CLOSED | null"
         }}
         """
 
