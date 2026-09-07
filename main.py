@@ -260,13 +260,41 @@ def get_dashboard_overview():
         conn = get_db_connection()
         cursor = conn.cursor()
 
+        # 1. Total Leads
         cursor.execute("SELECT COUNT(*) FROM leads")
         total_leads = cursor.fetchone()[0] or 0
 
-        cursor.execute("SELECT COUNT(*) FROM leads WHERE status='HOT LEAD'")
-        hot_leads_count = cursor.fetchone()[0] or 0
+        # 2. Real-time Active Chats (Leads with activity in the last 24 hours)
+        cursor.execute("""
+            SELECT COUNT(*) FROM leads 
+            WHERE last_interaction >= datetime('now', '-1 day')
+        """)
+        active_chats = cursor.fetchone()[0] or 0
 
-        cursor.execute("SELECT * FROM leads WHERE status='HOT LEAD' ORDER BY id DESC LIMIT 5")
+        # 3. Buyers & Sellers breakdown
+        cursor.execute("SELECT COUNT(*) FROM leads WHERE UPPER(intent) = 'BUYING'")
+        buyers_count = cursor.fetchone()[0] or 0
+
+        cursor.execute("SELECT COUNT(*) FROM leads WHERE UPPER(intent) = 'SELLING'")
+        sellers_count = cursor.fetchone()[0] or 0
+
+        # 4. Property Matches
+        cursor.execute("""
+            SELECT COUNT(*) FROM leads 
+            WHERE property_type IS NOT NULL AND property_type != ''
+        """)
+        property_matches = cursor.fetchone()[0] or 0
+
+        # 5. Conversion Rate
+        cursor.execute("""
+            SELECT COUNT(*) FROM leads 
+            WHERE UPPER(status) IN ('HOT LEAD', 'CLOSED')
+        """)
+        converted_leads = cursor.fetchone()[0] or 0
+        conversion_rate = round((converted_leads / total_leads * 100), 1) if total_leads > 0 else 0
+
+        # 6. Hot Leads List
+        cursor.execute("SELECT * FROM leads WHERE UPPER(status) = 'HOT LEAD' ORDER BY id DESC LIMIT 5")
         hot_leads_rows = cursor.fetchall()
         conn.close()
 
@@ -274,25 +302,25 @@ def get_dashboard_overview():
             {
                 "id": r["id"],
                 "name": r["name"] or "Unknown",
-                "phone_number": r["phone"] or "",
-                "budget": r["budget"] or "N/A",
-                "intent": r["intent"] or "BUYING",
-                "last_interaction": r["added_time"] or "Recently"
+                "phone_number": r["phone_number"] if "phone_number" in r.keys() else r.get("phone", ""),
+                "budget": f"PKR {r['budget_min']}" if "budget_min" in r.keys() and r["budget_min"] else r.get("budget", "N/A"),
+                "intent": (r["intent"] or "BUYING").upper(),
+                "last_interaction": r.get("last_interaction") or r.get("added_time") or "Recently"
             }
             for r in hot_leads_rows
         ]
 
         return {
             "total_leads": total_leads,
-            "active_chats": len(state_manager.active_websockets),
-            "property_matches": 12,
-            "conversion_rate": 18,
-            "total_leads_change": 12,
+            "active_chats": active_chats,
+            "property_matches": property_matches,
+            "conversion_rate": conversion_rate,
+            "total_leads_change": 0,
             "active_chats_change": 0,
-            "property_matches_change": 5,
-            "conversion_rate_change": 2,
-            "buyers_count": 8,
-            "sellers_count": 4,
+            "property_matches_change": 0,
+            "conversion_rate_change": 0,
+            "buyers_count": buyers_count,
+            "sellers_count": sellers_count,
             "hot_leads": hot_leads
         }
     except Exception as e:
@@ -302,11 +330,16 @@ def get_dashboard_overview():
             "active_chats": 0,
             "property_matches": 0,
             "conversion_rate": 0,
+            "total_leads_change": 0,
+            "active_chats_change": 0,
+            "property_matches_change": 0,
+            "conversion_rate_change": 0,
             "buyers_count": 0,
             "sellers_count": 0,
             "hot_leads": []
         }
 
+    
 @app.get("/api/dashboard/bot-activities")
 async def get_bot_activities():
     return state_manager.recent_activities
@@ -469,8 +502,8 @@ def get_create_lead(phone: str) -> int:
     cursor.execute(
         """
         INSERT INTO leads (phone_number, last_interaction)
-        VALUES (?, CURRENT_TIMESTAMP)
-        ON CONFLICT(phone_number) DO UPDATE SET last_interaction=CURRENT_TIMESTAMP
+        VALUES (?, datetime('now'))
+        ON CONFLICT(phone_number) DO UPDATE SET last_interaction=datetime('now')
         """,
         (phone,),
     )
