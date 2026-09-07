@@ -541,8 +541,8 @@ def get_create_lead(phone: str) -> int:
     cursor = conn.cursor()
     cursor.execute(
         """
-        INSERT INTO leads (phone_number, last_interaction)
-        VALUES (?, datetime('now'))
+        INSERT INTO leads (phone_number, intent, status, last_interaction)
+        VALUES (?, 'AWAITING INFO', 'NEW', datetime('now'))
         ON CONFLICT(phone_number) DO UPDATE SET last_interaction=datetime('now')
         """,
         (phone,),
@@ -665,7 +665,7 @@ def on_message(client: NewClient, message: MessageEv):
         - property_type: Commercial, Residential, Plot, House, Agriculture.
         - budget_min: Minimum budget numeric value (in PKR, handle "lakh" / "crore" conversions if applicable).
         - budget_max: Maximum budget numeric value (in PKR, handle "lakh" / "crore" conversions if applicable).
-        - status: Set to "NEW", "HOT LEAD", "AWAITING INFO", "FOLLOW UP", or "CLOSED".
+        - status: Set to "NEW", "FOLLOW UP", or "CLOSED".
 
         3. Conversational & Language Rules:
         - DO NOT re-ask details already saved in CURRENT EXTRACTED CLIENT STATE.
@@ -678,11 +678,11 @@ def on_message(client: NewClient, message: MessageEv):
         {{
         "reply": "Your response to the user asking for missing information or acknowledging details.",
         "name": "extracted name or null",
-        "intent": "BUYING | SELLING | RENT,
+        "intent": "BUYING | SELLING | RENT | AWAITING INFO,
         "property_type": "Plot/House/Commercial/etc or null",
         "budget_min": float number or null,
         "budget_max": float number or null,
-        "status": "NEW | HOT LEAD | AWAITING INFO | FOLLOW UP | CLOSED | null"
+        "status": "NEW | FOLLOW UP | CLOSED | null"
         }}
         """
 

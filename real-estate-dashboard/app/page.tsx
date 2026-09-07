@@ -81,10 +81,10 @@ interface Lead {
   id: number;
   name: string;
   phone: string;
-  intent: "BUYING" | "SELLING" | "RENT";
+  intent: "BUYING" | "SELLING" | "RENT" | "AWAITING INFO";
   propertyType: string;
   budget: string;
-  status: "HOT LEAD" | "NEW" | "AWAITING INFO" | "FOLLOW UP" | "CLOSED";
+  status: "NEW" | "FOLLOW UP" | "CLOSED";
   addedTime: string;
 }
 const MAX_ACTIVITIES = 4;
@@ -1249,8 +1249,6 @@ export default function MalikPropertyDashboard() {
                   >
                     <option value="All Statuses">All Statuses</option>
                     <option value="NEW">New</option>
-                    <option value="HOT LEAD">Hot Lead</option>
-                    <option value="AWAITING INFO">Awaiting Info</option>
                     <option value="FOLLOW UP">Follow Up</option>
                     <option value="CLOSED">Closed</option>
                   </select>
@@ -1275,6 +1273,7 @@ export default function MalikPropertyDashboard() {
                     <option value="BUYING">Buying Only</option>
                     <option value="SELLING">Selling Only</option>
                     <option value="RENT">Rent</option>
+                    <option value="AWAITING INFO">Awaiting Info</option>
                   </select>
                   <ChevronDown className="w-4 h-4 text-slate-400 absolute right-2.5 pointer-events-none" />
                 </div>
