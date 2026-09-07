@@ -44,7 +44,7 @@ class UpdateStatusPayload(BaseModel):
 @app.patch("/api/leads/{lead_id}/status")
 async def update_lead_status(lead_id: int, payload: UpdateStatusPayload):
     # Standardize incoming status string
-    valid_statuses = ["NEW", "FOLLOW UP",  "HOT LEAD", "CLOSED"]
+    valid_statuses = ["NEW", "FOLLOW UP", "CLOSED"]
     new_status = payload.status.upper()
     
     if new_status not in valid_statuses:
@@ -696,7 +696,7 @@ def on_message(client: NewClient, message: MessageEv):
         - property_type: Commercial, Residential, Plot, House, Agriculture.
         - budget_min: Minimum budget numeric value (in PKR, handle "lakh" / "crore" conversions if applicable).
         - budget_max: Maximum budget numeric value (in PKR, handle "lakh" / "crore" conversions if applicable).
-        - status: Set to "NEW", "FOLLOW UP", "HOT LEAD", or "CLOSED".
+        - status: Set to "NEW", "FOLLOW UP", or "CLOSED".
 
         3. Conversational & Language Rules:
         - DO NOT re-ask details already saved in CURRENT EXTRACTED CLIENT STATE.
@@ -713,7 +713,7 @@ def on_message(client: NewClient, message: MessageEv):
         "property_type": "Plot/House/Commercial/etc or null",
         "budget_min": float number or null,
         "budget_max": float number or null,
-        "status": "NEW | FOLLOW UP | HOT LEAD | CLOSED | null"
+        "status": "NEW | FOLLOW UP | CLOSED | null"
         }}
         """
 

@@ -84,7 +84,7 @@ interface Lead {
   intent: "BUYING" | "SELLING" | "RENT" | "AWAITING INFO";
   propertyType: string;
   budget: string;
-  status: "NEW" | "FOLLOW UP" | "HOT LEAD" | "CLOSED";
+  status: "NEW" | "FOLLOW UP" | "CLOSED";
   addedTime: string;
 }
 const MAX_ACTIVITIES = 4;
@@ -525,8 +525,6 @@ export default function MalikPropertyDashboard() {
   }, [inventory, searchTerm, statusFilter, typeFilter, sortBy]);
 
   const handleStatusChange = async (leadId: number, newStatus: string) => {
-    const targetUrl = `${API_BASE_URL}/api/leads/${leadId}/status`;
-    console.log("Attempting PATCH to:", targetUrl);
     // Optimistic UI state update
     setPipeLeads((prevLeads) =>
       prevLeads.map((lead) =>
@@ -1178,49 +1176,80 @@ export default function MalikPropertyDashboard() {
             </div>
 
             {/* Hot Leads Table */}
-            <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
-              <div className="p-5 border-b border-slate-100 flex justify-between items-center">
-                <h3 className="font-bold text-slate-900 text-base">
-                  Hot Leads
-                </h3>
-              </div>
+            {(() => {
+              // Fallback to pipeLeads if metrics.hot_leads is empty or undefined
+              const allLeads =
+                metrics?.hot_leads && metrics.hot_leads.length > 0
+                  ? metrics.hot_leads
+                  : (pipeLeads ?? []);
 
-              <table className="w-full text-left border-collapse text-xs">
-                <thead className="bg-slate-50 border-b border-slate-100 text-slate-400 font-semibold uppercase text-[10px]">
-                  <tr>
-                    <th className="py-3 px-6">Name / Phone</th>
-                    <th className="py-3 px-6">Budget</th>
-                    <th className="py-3 px-6">Intent</th>
-                    <th className="py-3 px-6">Last Interaction</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {(metrics?.hot_leads ?? []).map((lead) => (
-                    <tr
-                      key={lead.id}
-                      className="hover:bg-slate-50 transition-colors"
-                    >
-                      <td className="py-4 px-6 font-bold text-slate-900">
-                        {lead.name !== "Unknown"
-                          ? lead.name
-                          : lead.phone_number}
-                      </td>
-                      <td className="py-4 px-6 font-medium text-slate-700">
-                        {lead.budget}
-                      </td>
-                      <td className="py-4 px-6">
-                        <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-rose-50 text-rose-600 border border-rose-200">
-                          {lead.intent}
-                        </span>
-                      </td>
-                      <td className="py-4 px-6 text-slate-500">
-                        {lead.last_interaction}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+              const followUpLeads = allLeads.filter((lead: any) => {
+                const combinedStr =
+                  `${lead.status ?? ""} ${lead.intent ?? ""} ${lead.lead_status ?? ""}`.toLowerCase();
+                return (
+                  combinedStr.includes("follow") ||
+                  combinedStr.includes("follow up") ||
+                  combinedStr.includes("follow_up")
+                );
+              });
+
+              return (
+                <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
+                  <div className="p-5 border-b border-slate-100 flex justify-between items-center">
+                    <h3 className="font-bold text-slate-900 text-base">
+                      Follow Up Leads ({followUpLeads.length})
+                    </h3>
+                  </div>
+
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead className="bg-slate-50 border-b border-slate-100 text-slate-400 font-semibold uppercase text-[10px]">
+                      <tr>
+                        <th className="py-3 px-6">Name / Phone</th>
+                        <th className="py-3 px-6">Budget</th>
+                        <th className="py-3 px-6">Intent / Status</th>
+                        <th className="py-3 px-6">Last Interaction</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {followUpLeads.length > 0 ? (
+                        followUpLeads.map((lead: any) => (
+                          <tr
+                            key={lead.id || lead.phone_number}
+                            className="hover:bg-slate-50 transition-colors"
+                          >
+                            <td className="py-4 px-6 font-bold text-slate-900">
+                              {lead.name && lead.name !== "Unknown"
+                                ? lead.name
+                                : lead.phone_number || "N/A"}
+                            </td>
+                            <td className="py-4 px-6 font-medium text-slate-700">
+                              {lead.budget || "N/A"}
+                            </td>
+                            <td className="py-4 px-6">
+                              <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-50 text-amber-600 border border-amber-200">
+                                {lead.status || lead.intent || "Follow Up"}
+                              </span>
+                            </td>
+                            <td className="py-4 px-6 text-slate-500">
+                              {lead.last_interaction || lead.addedTime || "N/A"}
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td
+                            colSpan={4}
+                            className="py-8 text-center text-slate-400 font-medium"
+                          >
+                            No follow-up leads found
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
           </main>
         )}
 
@@ -1262,7 +1291,6 @@ export default function MalikPropertyDashboard() {
                     <option value="All Statuses">All Statuses</option>
                     <option value="NEW">New</option>
                     <option value="FOLLOW UP">Follow Up</option>
-                    <option value="HOT LEAD">Hot Lead</option>
                     <option value="CLOSED">Closed</option>
                   </select>
                   <ChevronDown className="w-4 h-4 text-slate-400 absolute right-2.5 pointer-events-none" />
@@ -1403,18 +1431,15 @@ export default function MalikPropertyDashboard() {
                             handleStatusChange(lead.id, e.target.value)
                           }
                           className={`px-2 py-1 rounded text-[10px] font-black tracking-wider uppercase border appearance-none pr-6 cursor-pointer focus:outline-none transition-colors ${
-                            lead.status === "HOT LEAD"
-                              ? "bg-rose-100 text-rose-700 border-rose-300"
-                              : lead.status === "NEW"
-                                ? "bg-blue-100 text-blue-700 border-blue-300"
-                                : lead.status === "FOLLOW UP"
-                                  ? "bg-amber-100 text-amber-700 border-amber-300"
-                                  : "bg-slate-100 text-slate-600 border-slate-300"
+                            lead.status === "NEW"
+                              ? "bg-blue-100 text-blue-700 border-blue-300"
+                              : lead.status === "FOLLOW UP"
+                                ? "bg-amber-100 text-amber-700 border-amber-300"
+                                : "bg-slate-100 text-slate-600 border-slate-300"
                           }`}
                         >
                           <option value="NEW">NEW</option>
                           <option value="FOLLOW UP">FOLLOW UP</option>
-                          <option value="HOT LEAD">HOT LEAD</option>
                           <option value="CLOSED">CLOSED</option>
                         </select>
                         <ChevronDown className="w-3 h-3 text-slate-500 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none" />
