@@ -87,7 +87,7 @@ interface Lead {
   status: "HOT LEAD" | "NEW" | "AWAITING INFO" | "FOLLOW UP" | "CLOSED";
   addedTime: string;
 }
-const MAX_ACTIVITIES = 5;
+const MAX_ACTIVITIES = 4;
 interface Activity {
   id: number;
   type: "bot" | "user" | "action";
@@ -308,98 +308,130 @@ export default function MalikPropertyDashboard() {
   }, [activeTab]);
 
   //qr
-  useEffect(() => {
-    let ws: WebSocket | null = null;
-    let reconnectTimer: NodeJS.Timeout;
+  // useEffect(() => {
+  //   let ws: WebSocket | null = null;
+  //   let reconnectTimer: NodeJS.Timeout;
 
-    const connect = () => {
-      // FIX: Match exact host localhost:8000
-      ws = new WebSocket(`${WS_BASE_URL}/ws/bot-status`);
+  //   const connect = () => {
+  //     // FIX: Match exact host localhost:8000
+  //     ws = new WebSocket(`${WS_BASE_URL}/ws/bot-status`);
 
-      ws.onopen = () => {
-        console.log("⚡ WebSocket connected to activity feed");
-      };
+  //     ws.onopen = () => {
+  //       console.log("⚡ WebSocket connected to activity feed");
+  //     };
 
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === "STATE_UPDATE") {
-            setStatus(data.status);
-            setQrCode(data.qr_code);
-            if (data.activities) setActivities(data.activities);
-          }
-          if (data.type === "NEW_ACTIVITY") {
-            setActivities((prev) => [data.activity, ...prev].slice(0, 20));
-          }
-        } catch (err) {
-          console.error("Error parsing WS data:", err);
-        }
-      };
+  //     ws.onmessage = (event) => {
+  //       try {
+  //         const data = JSON.parse(event.data);
+  //         if (data.type === "STATE_UPDATE") {
+  //           setStatus(data.status);
+  //           setQrCode(data.qr_code);
+  //           if (data.activities) setActivities(data.activities);
+  //         }
+  //         if (data.type === "NEW_ACTIVITY") {
+  //           setActivities((prev) => [data.activity, ...prev].slice(0, 20));
+  //         }
+  //       } catch (err) {
+  //         console.error("Error parsing WS data:", err);
+  //       }
+  //     };
 
-      ws.onclose = () => {
-        // Reconnect after 3 seconds if disconnected
-        reconnectTimer = setTimeout(connect, 3000);
-      };
+  //     ws.onclose = () => {
+  //       // Reconnect after 3 seconds if disconnected
+  //       reconnectTimer = setTimeout(connect, 3000);
+  //     };
 
-      ws.onerror = () => {
-        // Keep console clean
-      };
-    };
+  //     ws.onerror = () => {
+  //       // Keep console clean
+  //     };
+  //   };
 
-    connect();
+  //   connect();
 
-    return () => {
-      clearTimeout(reconnectTimer);
-      if (ws) ws.close();
-    };
-  }, []);
+  //   return () => {
+  //     clearTimeout(reconnectTimer);
+  //     if (ws) ws.close();
+  //   };
+  // }, []);
+
+  // useEffect(() => {
+  //   const ws = new WebSocket("ws://127.0.0.1:8000/ws/bot-status");
+
+  //   ws.onmessage = (event) => {
+  //     // Ignore non-JSON frame checks (e.g., ping/pong frames)
+  //     if (typeof event.data === "string" && !event.data.startsWith("{")) {
+  //       return;
+  //     }
+
+  //     try {
+  //       const message = JSON.parse(event.data);
+
+  //       if (message.event === "NEW_LEAD") {
+  //         fetchBotActivities();
+  //       } else if (message.event === "BOT_MESSAGE") {
+  //         const newActivity: Activity = {
+  //           id: Date.now(),
+  //           type: "bot",
+  //           text: "Bot responded to inquiry from",
+  //           highlightText: message.name || "Client",
+  //           targetText: message.message_text
+  //             ? `"${message.message_text}"`
+  //             : "via WhatsApp",
+  //           time: "JUST NOW",
+  //         };
+
+  //         // Prepend new activity and drop the oldest item beyond MAX_ACTIVITIES
+  //         setActivities((prev) =>
+  //           [newActivity, ...prev].slice(0, MAX_ACTIVITIES),
+  //         );
+  //       }
+  //     } catch (e) {
+  //       console.error("Error parsing WS payload:", e);
+  //     }
+  //   };
+
+  //   return () => {
+  //     if (
+  //       ws.readyState === WebSocket.OPEN ||
+  //       ws.readyState === WebSocket.CONNECTING
+  //     ) {
+  //       ws.close();
+  //     }
+  //   };
+  // }, [fetchBotActivities]);
 
   useEffect(() => {
     fetchBotActivities();
-  }, [fetchBotActivities]);
-  useEffect(() => {
+
     const ws = new WebSocket("ws://127.0.0.1:8000/ws/bot-status");
 
     ws.onmessage = (event) => {
-      // Ignore non-JSON frame checks (e.g., ping/pong frames)
-      if (typeof event.data === "string" && !event.data.startsWith("{")) {
-        return;
-      }
-
       try {
-        const message = JSON.parse(event.data);
+        const data = JSON.parse(event.data);
 
-        if (message.event === "NEW_LEAD") {
-          fetchBotActivities();
-        } else if (message.event === "BOT_MESSAGE") {
-          const newActivity: Activity = {
-            id: Date.now(),
-            type: "bot",
-            text: "Bot responded to inquiry from",
-            highlightText: message.name || "Client",
-            targetText: message.message_text
-              ? `"${message.message_text}"`
-              : "via WhatsApp",
-            time: "JUST NOW",
-          };
-
-          // Prepend new activity and drop the oldest item beyond MAX_ACTIVITIES
-          setActivities((prev) =>
-            [newActivity, ...prev].slice(0, MAX_ACTIVITIES),
-          );
+        if (data.type === "STATE_UPDATE" && Array.isArray(data.activities)) {
+          setBotStatus(data.status);
+          if (data.qr_code) setQrCode(data.qr_code);
+          setActivities(data.activities);
+        } else if (data.type === "NEW_ACTIVITY" && data.activity) {
+          setActivities((prev) => {
+            const isDup = prev.some(
+              (item) =>
+                item.id === data.activity.id ||
+                (item.targetText === data.activity.targetText &&
+                  item.text === data.activity.text),
+            );
+            if (isDup) return prev;
+            return [data.activity, ...prev].slice(0, 20);
+          });
         }
-      } catch (e) {
-        console.error("Error parsing WS payload:", e);
+      } catch (err) {
+        console.error("Error processing WebSocket activity event:", err);
       }
     };
 
     return () => {
-      if (
-        ws.readyState === WebSocket.OPEN ||
-        ws.readyState === WebSocket.CONNECTING
-      ) {
-        ws.close();
-      }
+      ws.close();
     };
   }, [fetchBotActivities]);
 
@@ -448,7 +480,7 @@ export default function MalikPropertyDashboard() {
       typeof window !== "undefined"
         ? window.location.hostname || "127.0.0.1"
         : "127.0.0.1";
-    const socket = new WebSocket(`ws://${host}:8000/ws/activity`);
+    const socket = new WebSocket(`ws://127.0.0.1:8000/ws/bot-status`);
 
     socket.onmessage = (event) => {
       try {
@@ -693,7 +725,7 @@ export default function MalikPropertyDashboard() {
       typeof window !== "undefined"
         ? window.location.hostname || "127.0.0.1"
         : "127.0.0.1";
-    const socket = new WebSocket(`ws://${host}:8000/ws/activity`);
+    const socket = new WebSocket(`ws://127.0.0.1:8000/ws/bot-status`);
 
     socket.onmessage = (event) => {
       try {
@@ -1061,7 +1093,7 @@ export default function MalikPropertyDashboard() {
             {/* Recent Activity & Intent */}
             <div className="grid grid-cols-3 gap-6">
               {/* Card constrained to fixed height with flex layout */}
-              <div className="col-span-2 h-[360px] bg-white rounded-xl border border-slate-200 p-6 shadow-2xs flex flex-col justify-between">
+              <div className="col-span-2 h-[380px] bg-white rounded-xl border border-slate-200 p-6 shadow-2xs flex flex-col justify-between">
                 <div className="flex justify-between items-center mb-4 flex-shrink-0">
                   <h3 className="font-bold text-slate-900 text-base">
                     Recent Bot Activity
@@ -1097,7 +1129,7 @@ export default function MalikPropertyDashboard() {
                 )}
 
                 {/* Inner scroll container with strict scrollbar overflow */}
-                <div className="flex-1 overflow-y-auto pr-1 space-y-3 scroll-smooth">
+                <div className="flex-1 overflow-y-auto pr-1 space-y-2 scroll-smooth">
                   {activities.length === 0 ? (
                     <p className="text-xs font-semibold text-slate-400 py-12 text-center">
                       No recent bot activity recorded.
@@ -1105,10 +1137,7 @@ export default function MalikPropertyDashboard() {
                   ) : (
                     activities.slice(0, 5).map((act, index) => (
                       <div
-                        key={
-                          act.id ||
-                          `act-${index}-${act.timestamp || Date.now()}`
-                        }
+                        key={`${act.id || "act"}-${index}-${act.time}`}
                         className="flex gap-3 items-start text-xs border-b border-slate-100 pb-2.5 last:border-0 last:pb-0 animate-slideDown transition-all duration-300 ease-in-out"
                       >
                         <div className="w-2 h-2 rounded-full mt-1 bg-emerald-600 flex-shrink-0" />

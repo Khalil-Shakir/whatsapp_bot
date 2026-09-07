@@ -13,13 +13,8 @@ import json, asyncio, qrcode, io, base64
 from neonize.client import NewClient
 from neonize.events import ConnectedEv, DisconnectedEv, MessageEv
 from contextlib import asynccontextmanager
-import json
-import os
-import sqlite3
 import urllib.request
 from groq import Groq
-from neonize.client import NewClient
-from neonize.events import MessageEv
 
 
 logging.basicConfig(level=logging.INFO)
@@ -89,22 +84,39 @@ class BotStateManager:
             except Exception as e:
                 logger.info(f"Error broadcasting to client: {e}")
 
+
+    async def add_activity(self, activity: dict):
+    # Ensure ID exists
+        if "id" not in activity or not activity["id"]:
+            activity["id"] = f"act-{time.time_ns()}"
+
+        # Deduplicate against existing activities in memory
+        is_duplicate = any(
+            a.get("id") == activity.get("id") or 
+            (a.get("text") == activity.get("text") and a.get("targetText") == activity.get("targetText"))
+            for a in self.recent_activities[:5]
+        )
+
+        if is_duplicate:
+            return
+
+        self.recent_activities.insert(0, activity)
+        if len(self.recent_activities) > 20:
+            self.recent_activities.pop()
+
+        # Send ONLY the new activity payload to avoid triggering fallback handlers
+        payload = {
+            "type": "NEW_ACTIVITY",
+            "activity": activity
+        }
+        await self.broadcast(payload)
+
     async def update_status(self, new_status: str, qr_base64: Optional[str] = None):
         self.status = new_status
         self.qr_code_base64 = qr_base64
         payload = self.get_state_payload()
         await self.broadcast(payload)
 
-    async def add_activity(self, activity: dict):
-        self.recent_activities.insert(0, activity)
-        if len(self.recent_activities) > 20:
-            self.recent_activities.pop()
-        payload = {
-            "type": "NEW_ACTIVITY",
-            "activity": activity,
-            "activities": self.recent_activities
-        }
-        await self.broadcast(payload)
 
 state_manager = BotStateManager()
 
@@ -520,21 +532,6 @@ def update_lead(
     conn.close()
 
 
-def notify_fastapi_dashboard(phone: str, name: str, intent: str, text: str):
-    """Triggers FastAPI internal endpoint to notify frontend over WebSocket."""
-    try:
-        url = "http://localhost:8000/api/internal/broadcast-lead"
-        payload = json.dumps({
-            "phone_number": phone,
-            "name": name or phone,
-            "intent": intent,
-            "message_text": text
-        }).encode("utf-8")
-        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=2)
-    except Exception as e:
-        print(f"⚠️ Failed to send WS ping to FastAPI: {e}")
-
 @client.event(MessageEv)
 def on_message(client: NewClient, message: MessageEv):
     if message.Info.MessageSource.IsFromMe:
@@ -552,9 +549,25 @@ def on_message(client: NewClient, message: MessageEv):
         return
 
     sender_jid = message.Info.MessageSource.Chat
+    try:
+        sender_user = message.Info.MessageSource.Chat.User
+    except AttributeError:
+        sender_user = message.Info.SourceString.split("@")[0] if message.Info.SourceString else "Unknown"
     clean_phone = format_pk_phone(sender_jid.User)
     print(f"📩 Received text from {clean_phone}: {text}")
 
+    user_activity = {
+        "id": f"in-{message.Info.ID}",
+        "type": "user",
+        "text": "Received message from",
+        "highlightText": clean_phone,
+        "targetText": f'"{text}"',
+        "time": "JUST NOW"
+    }
+    asyncio.run_coroutine_threadsafe(
+        state_manager.add_activity(user_activity),
+        loop
+    )
     try:
         lead_id = get_create_lead(clean_phone)
         current_state = get_lead_state(lead_id)
@@ -639,14 +652,20 @@ def on_message(client: NewClient, message: MessageEv):
         reply_text = data.get("reply", "Shukriya! Malik Property se rabta karne ka.")
         client.send_message(to=sender_jid, message=reply_text)
         print(f"✅ Replied to {clean_phone}")
+        bot_activity = {
+        "id": f"out-{message.Info.ID}",
+        "type": "bot",
+        "text": "Bot replied to",
+        "highlightText": clean_phone,
+        "targetText": f'"{reply_text}"',
+        "time": "JUST NOW"
+        }
 
-        # Broadcast update to FastAPI WS Dashboard
-        notify_fastapi_dashboard(
-            phone=clean_phone,
-            name=data.get("name") or current_state.get("name") or clean_phone,
-            intent=clean_intent,
-            text=text
+        asyncio.run_coroutine_threadsafe(
+            state_manager.add_activity(bot_activity),
+            loop
         )
+
 
     except Exception as e:
         print(f"❌ Error during message processing: {e}")
