@@ -13,7 +13,7 @@ import json, asyncio, qrcode, io, base64, time
 from neonize.client import NewClient
 from neonize.events import ConnectedEv, DisconnectedEv, MessageEv
 from contextlib import asynccontextmanager
-import urllib.request
+from typing import Dict, Any, List
 from groq import Groq
 from fastapi import HTTPException
 
@@ -98,7 +98,7 @@ async def toggle_lead_bot(lead_id: int, payload: ToggleBotPayload):
 
     return {"status": "success", "lead_id": lead_id, "bot_enabled": payload.enabled}
 
-@api.patch("api/inventory/{item_id}/status")
+@app.patch("api/inventory/{item_id}/status")
 async def updateInventoryItemStatus(item_id: int, payload: UpdateInventoryStatusPayload):
     valid_statuses = ["AVAILABLE", "PENDING", "SOLD"]
     new_status = payload.status.upper()
@@ -118,8 +118,8 @@ async def updateInventoryItemStatus(item_id: int, payload: UpdateInventoryStatus
 
     await state_manager.add_activity({
         "type" : "action",
-        "text" : f"Property listing #{item_id} status updated to "
-        "highlightText": new_status
+        "text" : f"Property listing #{item_id} status updated to ",
+        "highlightText": new_status,
         "time": "JUST NOW"
         })
     return {"status": "success", "item_id": item_id, "new_status": new_status}
@@ -427,16 +427,19 @@ def get_dashboard_overview():
 async def get_bot_activities():
     return state_manager.recent_activities
 
-@app.get("/api/inventory", response_model=List[PropertyItem])
-async def get_inventory():
+@app.get("/api/inventory", response_model=Dict[str, Any])
+async def get_inventory(page: int, limit: int = 6):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM inventory ORDER BY id DESC")
+        offset = (page-1)*limit
+        cursor.execute("SELECT COUNT(*) FROM inventory")
+        total_items = cursor.fetchone()[0] or 0
+        cursor.execute("SELECT * FROM inventory ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset))
         rows = cursor.fetchall()
         conn.close()
 
-        return [
+        items = [
             {
                 "id": r["id"],
                 "title": r["title"],
@@ -452,9 +455,16 @@ async def get_inventory():
             }
             for r in rows
         ]
+        return {
+            "items": items,
+            "total_items": total_items,
+            "page": page,
+            "limit":limit,
+            "total_pages": ()
+        }
     except Exception as e:
         logger.error(f"Error in GET /api/inventory: {e}")
-        return []
+        return {"items":[], "total_items": 0, "page":1, "limit":limit, "total_pages":1}
 
 @app.post("/api/inventory")
 async def create_property(

@@ -204,6 +204,9 @@ export default function MalikPropertyDashboard() {
   const [sortOrder, setSortOrder] = useState<"highest" | "lowest">("highest");
   const [matchingPairs, setMatchingPairs] = useState<any[]>([]);
   const [matchPairs, setMatchPairs] = useState<MatchPair[]>([]);
+  const [inventoryPage, setInventoryPage] = useState<number>(1);
+  const [totalPages, setTotalPages] = useState<number>(1);
+  const ITEMS_PER_PAGE = 6;
   const [sendingProposalId, setSendingProposalId] = useState<number | null>(
     null,
   );
@@ -497,12 +500,15 @@ export default function MalikPropertyDashboard() {
     sqft: "2500",
   });
 
-  const fetchInventory = async () => {
+  const fetchInventory = async (page: number = inventoryPage) => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/inventory`);
+      const res = await fetch(
+        `${API_BASE_URL}/api/inventory?page=${page}&limit=${ITEMS_PER_PAGE}`,
+      );
       if (res.ok) {
         const data = await res.json();
-        setInventory(data);
+        setInventory(data.items || []);
+        setTotalPages(data.totalPages || 1);
       }
     } catch (err) {
       console.warn("Could not connect to inventory API at 127.0.0.1:8000.");
@@ -510,7 +516,9 @@ export default function MalikPropertyDashboard() {
   };
 
   useEffect(() => {
-    fetchInventory();
+    if (activeTab === "Inventory") {
+      fetchInventory(inventoryPage);
+    }
 
     // Real-time synchronization
     const host =
@@ -534,7 +542,7 @@ export default function MalikPropertyDashboard() {
     };
 
     return () => socket.close();
-  }, []);
+  }, [activeTab, inventoryPage]);
 
   const filteredInventory = useMemo(() => {
     return inventory
@@ -1983,24 +1991,61 @@ export default function MalikPropertyDashboard() {
             )}
 
             {/* Pagination Bar */}
-            <div className="flex items-center justify-center gap-2 pt-4">
-              <button className="w-8 h-8 rounded-lg border border-slate-200 bg-white flex items-center justify-center text-slate-400 hover:text-slate-700">
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <button className="w-8 h-8 rounded-lg bg-slate-900 text-white font-bold text-xs flex items-center justify-center">
-                1
-              </button>
-              <button className="w-8 h-8 rounded-lg border border-slate-200 bg-white text-slate-600 font-bold text-xs flex items-center justify-center hover:bg-slate-50">
-                2
-              </button>
-              <button className="w-8 h-8 rounded-lg border border-slate-200 bg-white text-slate-600 font-bold text-xs flex items-center justify-center hover:bg-slate-50">
-                3
-              </button>
-              <button className="w-8 h-8 rounded-lg border border-slate-200 bg-white flex items-center justify-center text-slate-400 hover:text-slate-700">
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
+            {totalPages > 0 && (
+              <div className="flex items-center justify-between bg-white px-6 py-4 rounded-2xl border border-slate-200 mt-6 shadow-xs">
+                <p className="text-xs font-semibold text-slate-500">
+                  Showing page{" "}
+                  <span className="font-bold text-slate-800">
+                    {inventoryPage}
+                  </span>{" "}
+                  of{" "}
+                  <span className="font-bold text-slate-800">{totalPages}</span>
+                </p>
 
+                <div className="flex items-center gap-2">
+                  {/* Previous Button */}
+                  <button
+                    onClick={() =>
+                      setInventoryPage((prev) => Math.max(prev - 1, 1))
+                    }
+                    disabled={inventoryPage === 1}
+                    className="p-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+
+                  {/* Dynamic Page Tab Numbers */}
+                  {Array.from({ length: totalPages }, (_, index) => {
+                    const pageNumber = index + 1;
+                    const isActive = pageNumber === inventoryPage;
+                    return (
+                      <button
+                        key={pageNumber}
+                        onClick={() => setInventoryPage(pageNumber)}
+                        className={`w-8 h-8 rounded-xl text-xs font-black transition-all ${
+                          isActive
+                            ? "bg-slate-900 text-white shadow-xs scale-105"
+                            : "bg-slate-50 text-slate-700 hover:bg-slate-100 border border-slate-200"
+                        }`}
+                      >
+                        {pageNumber}
+                      </button>
+                    );
+                  })}
+
+                  {/* Next Button */}
+                  <button
+                    onClick={() =>
+                      setInventoryPage((prev) => Math.min(prev + 1, totalPages))
+                    }
+                    disabled={inventoryPage === totalPages}
+                    className="p-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
             {/* Add New Property Modal */}
             {isAddModalOpen && (
               <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
