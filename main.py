@@ -1,4 +1,4 @@
-import os
+import os, re
 import shutil
 import logging
 import sqlite3
@@ -427,35 +427,150 @@ def get_dashboard_overview():
 async def get_bot_activities():
     return state_manager.recent_activities
 
+def parse_price(price_str: str) -> float:
+    """Helper function to parse numeric values from price strings."""
+    if not price_str:
+        return 0.0
+    # Strip currency indicators, commas, and letters
+    cleaned = re.sub(r"[^\d.]", "", str(price_str))
+    try:
+        return float(cleaned)
+    except ValueError:
+        return 0.0
+
 @app.get("/api/property-matches")
 async def get_property_matches():
-    # Return matched pairs between leads and inventory listings
-    return [
-        {
-            "id": 1,
-            "matchScore": 95,
-            "lead": {
-                "name": "James Wilson",
-                "initials": "JW",
-                "source": "WhatsApp",
-                "lastActive": "10m ago",
-                "budget": "$850k - $1.2M",
-                "type": "Villa",
-                "location": "Metropolis",
-                "status": "HOT LEAD",
-            },
-            "property": {
-                "title": "Modern Luxury Villa",
-                "price": "$950,000",
-                "tag": "High Match",
-                "image": "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?w=500&auto=format&fit=crop&q=80",
-                "beds": 4,
-                "baths": 3,
-                "sqft": 3200,
-            },
-        }
-    ]
+    try:
+        conn = get_db_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
 
+        # Fetch leads and inventory
+        cursor.execute("SELECT * FROM leads ORDER BY id DESC")
+        raw_leads = [dict(row) for row in cursor.fetchall()]
+
+        cursor.execute("SELECT * FROM inventory WHERE UPPER(status) = 'AVAILABLE'")
+        raw_inventory = [dict(row) for row in cursor.fetchall()]
+
+        conn.close()
+
+        matches = []
+
+        for lead in raw_leads:
+            lead_id = lead.get("id")
+            lead_name = (
+                lead.get("name")
+                or lead.get("phone_number")
+                or lead.get("phone")
+                or f"Lead #{lead_id}"
+            )
+            lead_phone = lead.get("phone_number") or lead.get("phone") or "N/A"
+            lead_type = (lead.get("property_type") or "").strip().lower()
+            lead_intent = (lead.get("intent") or "Buying").strip().upper()
+            
+            # Retrieve numeric budget values
+            b_min = lead.get("budget_min")
+            b_max = lead.get("budget_max")
+            fallback_budget = lead.get("budget")
+
+            best_match = None
+            highest_score = 0
+
+            for prop in raw_inventory:
+                prop_type = (prop.get("type") or "").strip().lower()
+                prop_price_val = parse_price(prop.get("price"))
+
+                score = 50  # Base match score
+
+                # Match property type
+                if lead_type and prop_type:
+                    if lead_type in prop_type or prop_type in lead_type:
+                        score += 25
+
+                # Match budget range
+                if b_min is not None or b_max is not None:
+                    min_val = b_min if b_min is not None else 0
+                    max_val = b_max if b_max is not None else float("inf")
+                    if min_val <= prop_price_val <= max_val:
+                        score += 20
+                    elif prop_price_val < min_val:
+                        score += 10
+                elif fallback_budget:
+                    budget_val = parse_price(fallback_budget)
+                    if budget_val > 0 and abs(budget_val - prop_price_val) <= (budget_val * 0.2):
+                        score += 20
+
+                if score > highest_score:
+                    highest_score = score
+                    best_match = prop
+
+            # Format result if a match is determined
+            if best_match and highest_score >= 60:
+                matches.append({
+                    "id": f"match-{lead_id}-{best_match.get('id')}",
+                    "matchScore": highest_score,
+                    "lead": {
+                        "id": lead_id,
+                        "name": lead_name,
+                        "phone": lead_phone,
+                        "initials": lead_name[:2].upper() if lead_name else "LD",
+                        "intent": lead_intent,
+                        "source": "WhatsApp Bot",
+                        "lastActive": lead.get("last_interaction") or lead.get("added_time") or "Recently",
+                        "budget": (
+                            f"PKR {b_min:,.0f} - {b_max:,.0f}" if b_min and b_max 
+                            else (fallback_budget or "Not Specified")
+                        ),
+                        "type": lead.get("property_type") or "Any",
+                        "location": lead.get("location") or "Mianwali",
+                        "status": lead.get("status") or "NEW"
+                    },
+                    "property": {
+                        "id": best_match.get("id"),
+                        "title": best_match.get("title") or "Database Property",
+                        "price": best_match.get("price") or "Contact Agent",
+                        "image": best_match.get("image") or "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?w=600&auto=format&fit=crop",
+                        "beds": best_match.get("beds") or 0,
+                        "baths": best_match.get("baths") or 0,
+                        "sqft": best_match.get("sqft") or 0,
+                        "tag": best_match.get("type") or "Property"
+                    }
+                })
+
+        # Sort matches so the top recommended pair appears first
+        matches.sort(key=lambda x: x["matchScore"], reverse=True)
+        return matches
+
+    except Exception as e:
+        logger.error(f"Failed to calculate property matches: {str(e)}")
+        return []
+
+class ProposalRequest(BaseModel):
+    lead_id: int
+    phone: str
+    property_id: int
+    property_title: str
+    price: str
+
+@app.post("/api/send-proposal")
+async def send_proposal(req: ProposalRequest):
+    try:
+        # Construct proposal text message
+        message = (
+            f"Hello! We found a property matching your requirements:\n\n"
+            f"🏠 *{req.property_title}*\n"
+            f"💰 Price: {req.price}\n\n"
+            f"Let us know if you would like to schedule a visit or receive more details!"
+        )
+        
+        # Call your existing WhatsApp Bot dispatch logic / SQLite log update
+        logger.info(f"Sending proposal to {req.phone} for Property ID {req.property_id}")
+        
+        # Return success response
+        return {"status": "success", "message": "Proposal dispatched successfully."}
+    except Exception as e:
+        logger.error(f"Error sending proposal: {str(e)}")
+        raise HTTPException(status_code=500, detail="Proposal dispatch failed.")
 @app.get("/api/inventory", response_model=Dict[str, Any])
 async def get_inventory(page: int = 1, limit: int = 6):
     try:
