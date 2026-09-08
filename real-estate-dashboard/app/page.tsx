@@ -560,6 +560,31 @@ export default function MalikPropertyDashboard() {
       });
   }, [inventory, searchTerm, statusFilter, typeFilter, sortBy]);
 
+  const handleInventoryStatusChange = async (
+    itemId: number,
+    newStatus: string,
+  ) => {
+    setInventory((prev) =>
+      prev.map((item) =>
+        item.id === itemId ? { ...item, status: newStatus as any } : item,
+      ),
+    );
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/inventory/${itemId}/status`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: newStatus }),
+        },
+      );
+      if (!response.ok) fetchInventory();
+    } catch (error) {
+      console.log("Failed to update inventory status:", error);
+      fetchInventory();
+    }
+  };
   const handleStatusChange = async (leadId: number, newStatus: string) => {
     // Optimistic UI state update
     setPipeLeads((prevLeads) =>
@@ -1876,18 +1901,40 @@ export default function MalikPropertyDashboard() {
                         alt={item.title}
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                       />
-                      <span
-                        className={`absolute top-3 left-3 px-2.5 py-1 text-[10px] font-black rounded-md tracking-wider uppercase backdrop-blur-xs flex items-center gap-1.5 ${
-                          item.status === "AVAILABLE"
-                            ? "bg-emerald-500/90 text-white"
-                            : item.status === "PENDING"
-                              ? "bg-amber-500/90 text-white"
-                              : "bg-rose-500/90 text-white"
-                        }`}
-                      >
-                        <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-                        {item.status}
-                      </span>
+                      <div className="absolute top-3 left-3 z-10">
+                        <select
+                          value={item.status}
+                          onChange={(e) =>
+                            handleInventoryStatusChange(item.id, e.target.value)
+                          }
+                          className={`px-2.5 py-1 text-[10px] font-black rounded-md tracking-wider uppercase border appearance-none cursor-pointer focus:outline-none transition-colors ${
+                            item.status === "AVAILABLE"
+                              ? "bg-emerald-500/90 text-white border-emerald-600"
+                              : item.status === "PENDING"
+                                ? "bg-amber-500/90 text-white border-amber-600"
+                                : "bg-rose-500/90 text-white border-rose-600"
+                          }`}
+                        >
+                          <option
+                            value="AVAILABLE"
+                            className="bg-white text-slate-900"
+                          >
+                            AVAILABLE
+                          </option>
+                          <option
+                            value="PENDING"
+                            className="bg-white text-slate-900"
+                          >
+                            PENDING
+                          </option>
+                          <option
+                            value="SOLD"
+                            className="bg-white text-slate-900"
+                          >
+                            SOLD
+                          </option>
+                        </select>
+                      </div>
                     </div>
 
                     <div className="p-5">
@@ -1922,7 +1969,7 @@ export default function MalikPropertyDashboard() {
 
                         <div className="text-right">
                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                            {item.status === "SOLD" ? "Closed On" : "Added"}
+                            {item.status === "SOLD" ? "Closed" : "Added"}
                           </span>
                           <span className="text-xs font-extrabold text-slate-700">
                             {item.dateAdded}

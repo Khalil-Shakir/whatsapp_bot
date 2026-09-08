@@ -43,6 +43,8 @@ class UpdateStatusPayload(BaseModel):
 
 class ToggleBotPayload(BaseModel):
     enabled: bool
+class UpdateInventoryStatusPayload(BaseModel):
+    status: str
 
 @app.patch("/api/leads/{lead_id}/status")
 async def update_lead_status(lead_id: int, payload: UpdateStatusPayload):
@@ -96,6 +98,31 @@ async def toggle_lead_bot(lead_id: int, payload: ToggleBotPayload):
 
     return {"status": "success", "lead_id": lead_id, "bot_enabled": payload.enabled}
 
+@api.patch("api/inventory/{item_id}/status")
+async def updateInventoryItemStatus(item_id: int, payload: UpdateInventoryStatusPayload):
+    valid_statuses = ["AVAILABLE", "PENDING", "SOLD"]
+    new_status = payload.status.upper()
+
+    if not new_status in valid_statuses:
+        raise HTTPException(status_code=400, detail="Invalid status value")
+
+    connect = get_db_connection()
+    cursor = connect.cursor()
+    cursor.execute("UPDATE inventory SET status = ? WHERE id = ?",(new_status, item_id))
+
+    if cursor.rowcount == 0:
+        connect.close()
+        raise HTTPException(status_code=404, detail="Inventory item not found")
+
+    connect.close()
+
+    await state_manager.add_activity({
+        "type" : "action",
+        "text" : f"Property listing #{item_id} status updated to "
+        "highlightText": new_status
+        "time": "JUST NOW"
+        })
+    return {"status": "success", "item_id": item_id, "new_status": new_status}
 
 app.add_middleware(
     CORSMiddleware,
