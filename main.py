@@ -571,6 +571,7 @@ async def send_proposal(req: ProposalRequest):
     except Exception as e:
         logger.error(f"Error sending proposal: {str(e)}")
         raise HTTPException(status_code=500, detail="Proposal dispatch failed.")
+    
 @app.get("/api/inventory", response_model=Dict[str, Any])
 async def get_inventory(page: int = 1, limit: int = 6):
     try:
@@ -609,6 +610,28 @@ async def get_inventory(page: int = 1, limit: int = 6):
     except Exception as e:
         logger.error(f"Error in GET /api/inventory: {e}")
         return {"items":[], "total_items": 0, "page":1, "limit":limit, "total_pages":1}
+
+@app.delete("/api/inventory/{item_id}")
+async def delete_inventory_item(item_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM inventory WHERE id = ?", (item_id,))
+    conn.commit()
+    
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Inventory item not found")
+        
+    conn.close()
+
+    await state_manager.add_activity({
+        "type": "action",
+        "text": f"Property listing #{item_id} deleted",
+        "highlightText": "DELETED",
+        "time": "JUST NOW"
+    })
+
+    return {"status": "success", "item_id": item_id}
 
 @app.post("/api/inventory")
 async def create_property(

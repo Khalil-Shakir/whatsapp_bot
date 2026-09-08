@@ -7,7 +7,6 @@ import {
   Building2,
   MessageSquare,
   CircleDollarSign,
-  Settings,
   HelpCircle,
   LogOut,
   Search,
@@ -47,6 +46,7 @@ import {
   WifiOff,
   Loader2,
   Send,
+  MapIcon,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import LeadIntentCard from "@/src/components/LeadIntentCard";
@@ -171,7 +171,7 @@ interface InventoryItem {
 export default function MalikPropertyDashboard() {
   const [mounted, setMounted] = useState(false);
   const [activeTab, setActiveTab] = useState<
-    "Dashboard" | "Leads" | "Inventory" | "Property Matches" | "Settings"
+    "Dashboard" | "Leads" | "Inventory" | "Property Matches"
   >("Dashboard");
   const [settingsSection, setSettingsSection] = useState<
     "Agency Profile" | "Account Details" | "Bot Configuration" | "Notifications"
@@ -210,6 +210,7 @@ export default function MalikPropertyDashboard() {
   const [matchPairs, setMatchPairs] = useState<MatchPair[]>([]);
   const [inventoryPage, setInventoryPage] = useState<number>(1);
   const [totalPages, setTotalPages] = useState<number>(1);
+  const [activeDropdownId, setActiveDropdownId] = useState<number | null>(null);
   const ITEMS_PER_PAGE = 6;
   const [demandedListings, setDemandedListings] = useState<DemandedListing[]>(
     [],
@@ -232,7 +233,6 @@ export default function MalikPropertyDashboard() {
       const formattedPhone = cleanNumber.startsWith("0")
         ? `92${cleanNumber.slice(1)}`
         : cleanNumber;
-
       // Extract property details
       const title = match.property?.title || "Property";
       const price = match.property?.price || "";
@@ -255,6 +255,24 @@ export default function MalikPropertyDashboard() {
       console.error("Error launching WhatsApp:", error);
     } finally {
       setSendingProposalId(null);
+    }
+  };
+
+  const handleDeleteInventoryItem = async (itemId: number) => {
+    // Optimistically remove from UI
+    setInventory((prev) => prev.filter((item) => item.id !== itemId));
+    setActiveDropdownId(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/inventory/${itemId}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        fetchInventory(); // Revert/refresh if API fails
+      }
+    } catch (err) {
+      console.error("Failed to delete inventory item:", err);
+      fetchInventory();
     }
   };
 
@@ -1017,8 +1035,8 @@ export default function MalikPropertyDashboard() {
           </div>
 
           <button className="w-full bg-black hover:bg-slate-800 text-white font-medium text-xs py-2.5 px-4 rounded-lg flex items-center justify-center gap-2 mb-6 transition-all shadow-2xs">
-            <Plus className="w-4 h-4" />
-            {activeTab === "Settings" ? "Add New Lead" : "New Broadcast"}
+            <MapIcon className="w-4 h-4" />
+            Dashboard Tabs
           </button>
 
           <nav className="space-y-1">
@@ -1027,7 +1045,6 @@ export default function MalikPropertyDashboard() {
               { label: "Leads", icon: Users },
               { label: "Inventory", icon: Building },
               { label: "Property Matches", icon: Building2 },
-              { label: "Settings", icon: Settings },
             ].map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.label;
@@ -2031,9 +2048,32 @@ export default function MalikPropertyDashboard() {
                             {item.location}
                           </p>
                         </div>
-                        <button className="text-slate-400 hover:text-slate-600 p-1">
-                          <MoreVertical className="w-4 h-4" />
-                        </button>
+                        <div className="relative">
+                          <button
+                            onClick={() =>
+                              setActiveDropdownId(
+                                activeDropdownId === item.id ? null : item.id,
+                              )
+                            }
+                            className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors"
+                          >
+                            <MoreVertical className="w-4 h-4" />
+                          </button>
+
+                          {activeDropdownId === item.id && (
+                            <div className="absolute right-0 mt-1 w-36 bg-white border border-slate-200 rounded-lg shadow-lg py-1 z-30">
+                              <button
+                                onClick={() =>
+                                  handleDeleteInventoryItem(item.id)
+                                }
+                                className="w-full text-left px-4 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 flex items-center gap-2"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                Delete Property
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       <div className="mt-6 pt-4 border-t border-slate-100 flex justify-between items-end">
@@ -2440,262 +2480,6 @@ export default function MalikPropertyDashboard() {
                 </div>
               </div>
             )}
-          </main>
-        )}
-
-        {/* Settings View Screen Layout */}
-        {activeTab === "Settings" && (
-          <main className="p-8 max-w-7xl mx-auto w-full">
-            <div className="grid grid-cols-12 gap-8 items-start">
-              {/* Settings Sub-Navigation Column */}
-              <div className="col-span-3 space-y-1">
-                {[
-                  "Agency Profile",
-                  "Account Details",
-                  "Bot Configuration",
-                  "Notifications",
-                ].map((section) => {
-                  const isActive = settingsSection === section;
-                  return (
-                    <button
-                      key={section}
-                      onClick={() => setSettingsSection(section as any)}
-                      className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-xs font-medium transition-all ${
-                        isActive
-                          ? "bg-slate-100 text-slate-900 font-bold border border-slate-200 shadow-2xs"
-                          : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                      }`}
-                    >
-                      <span>{section}</span>
-                      {isActive && (
-                        <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Settings Main Controls Column */}
-              <div className="col-span-9 space-y-6">
-                {/* Agency Profile Form Box */}
-                <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-2xs">
-                  <div className="mb-6">
-                    <h3 className="font-bold text-slate-900 text-base">
-                      Agency Profile
-                    </h3>
-                    <p className="text-xs text-slate-500 mt-1">
-                      Manage your agency's public details and contact
-                      information.
-                    </p>
-                  </div>
-
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
-                          AGENCY NAME
-                        </label>
-                        <input
-                          type="text"
-                          value={agencyName}
-                          onChange={(e) => setAgencyName(e.target.value)}
-                          className="w-full bg-white border border-slate-200 rounded-lg px-3.5 py-2.5 text-xs text-slate-800 font-medium focus:outline-none focus:ring-1 focus:ring-slate-400"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
-                          WHATSAPP NUMBER
-                        </label>
-                        <input
-                          type="text"
-                          value={whatsappNumber}
-                          onChange={(e) => setWhatsappNumber(e.target.value)}
-                          className="w-full bg-white border border-slate-200 rounded-lg px-3.5 py-2.5 text-xs text-slate-800 font-medium focus:outline-none focus:ring-1 focus:ring-slate-400"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
-                        BUSINESS ADDRESS
-                      </label>
-                      <textarea
-                        rows={3}
-                        value={businessAddress}
-                        onChange={(e) => setBusinessAddress(e.target.value)}
-                        className="w-full bg-white border border-slate-200 rounded-lg p-3.5 text-xs text-slate-800 font-medium focus:outline-none focus:ring-1 focus:ring-slate-400 resize-none leading-relaxed"
-                      />
-                    </div>
-
-                    <div className="pt-2 flex justify-end">
-                      <button className="bg-black hover:bg-slate-800 text-white font-bold text-xs py-2.5 px-5 rounded-lg transition-colors shadow-2xs">
-                        Save Changes
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Bot Configuration Options Box */}
-                <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-2xs">
-                  <div className="mb-6">
-                    <h3 className="font-bold text-slate-900 text-base">
-                      Bot Configuration
-                    </h3>
-                    <p className="text-xs text-slate-500 mt-1">
-                      Automate interactions and lead qualification.
-                    </p>
-                  </div>
-
-                  <div className="space-y-3">
-                    {/* Switch Toggle 1 */}
-                    <div className="bg-slate-50/60 rounded-xl p-4 border border-slate-100 flex items-center justify-between">
-                      <div>
-                        <h4 className="font-bold text-slate-900 text-xs">
-                          Auto-reply
-                        </h4>
-                        <p className="text-[11px] text-slate-500 mt-0.5">
-                          Instantly respond to initial inquiries.
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setAutoReply(!autoReply)}
-                        className={`w-11 h-6 flex items-center rounded-full p-1 transition-colors duration-200 ease-in-out cursor-pointer ${
-                          autoReply ? "bg-[#065f46]" : "bg-slate-300"
-                        }`}
-                      >
-                        <div
-                          className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform duration-200 ease-in-out ${
-                            autoReply ? "translate-x-5" : "translate-x-0"
-                          }`}
-                        />
-                      </button>
-                    </div>
-
-                    {/* Switch Toggle 2 */}
-                    <div className="bg-slate-50/60 rounded-xl p-4 border border-slate-100 flex items-center justify-between">
-                      <div>
-                        <h4 className="font-bold text-slate-900 text-xs">
-                          Lead Qualification Bot
-                        </h4>
-                        <p className="text-[11px] text-slate-500 mt-0.5">
-                          Ask preliminary questions to assess budget and
-                          timeline.
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setLeadQualification(!leadQualification)}
-                        className={`w-11 h-6 flex items-center rounded-full p-1 transition-colors duration-200 ease-in-out cursor-pointer ${
-                          leadQualification ? "bg-[#065f46]" : "bg-slate-300"
-                        }`}
-                      >
-                        <div
-                          className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform duration-200 ease-in-out ${
-                            leadQualification
-                              ? "translate-x-5"
-                              : "translate-x-0"
-                          }`}
-                        />
-                      </button>
-                    </div>
-
-                    {/* Switch Toggle 3 */}
-                    <div className="bg-slate-50/60 rounded-xl p-4 border border-slate-100 flex items-center justify-between">
-                      <div>
-                        <h4 className="font-bold text-slate-900 text-xs">
-                          Smart Matching
-                        </h4>
-                        <p className="text-[11px] text-slate-500 mt-0.5">
-                          Automatically suggest properties to qualified leads.
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setSmartMatching(!smartMatching)}
-                        className={`w-11 h-6 flex items-center rounded-full p-1 transition-colors duration-200 ease-in-out cursor-pointer ${
-                          smartMatching ? "bg-[#065f46]" : "bg-slate-300"
-                        }`}
-                      >
-                        <div
-                          className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform duration-200 ease-in-out ${
-                            smartMatching ? "translate-x-5" : "translate-x-0"
-                          }`}
-                        />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Notifications Checkbox Box */}
-                <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-2xs">
-                  <div className="mb-6">
-                    <h3 className="font-bold text-slate-900 text-base">
-                      Notifications
-                    </h3>
-                    <p className="text-xs text-slate-500 mt-1">
-                      Manage how you receive alerts and summaries.
-                    </p>
-                  </div>
-
-                  <div className="space-y-4">
-                    <label className="flex items-center gap-3 cursor-pointer select-none">
-                      <button
-                        type="button"
-                        onClick={() => setWhatsappAlerts(!whatsappAlerts)}
-                        className="text-black focus:outline-none"
-                      >
-                        {whatsappAlerts ? (
-                          <CheckSquare className="w-4 h-4 fill-black text-white" />
-                        ) : (
-                          <Square className="w-4 h-4 text-slate-300" />
-                        )}
-                      </button>
-                      <span className="text-xs font-semibold text-slate-800">
-                        WhatsApp alerts for hot leads
-                      </span>
-                    </label>
-
-                    <label className="flex items-center gap-3 cursor-pointer select-none">
-                      <button
-                        type="button"
-                        onClick={() => setNewLeadEmails(!newLeadEmails)}
-                        className="text-black focus:outline-none"
-                      >
-                        {newLeadEmails ? (
-                          <CheckSquare className="w-4 h-4 fill-black text-white" />
-                        ) : (
-                          <Square className="w-4 h-4 text-slate-300" />
-                        )}
-                      </button>
-                      <span className="text-xs font-semibold text-slate-800">
-                        New lead emails
-                      </span>
-                    </label>
-
-                    <label className="flex items-center gap-3 cursor-pointer select-none">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setDailyMatchSummaries(!dailyMatchSummaries)
-                        }
-                        className="text-black focus:outline-none"
-                      >
-                        {dailyMatchSummaries ? (
-                          <CheckSquare className="w-4 h-4 fill-black text-white" />
-                        ) : (
-                          <Square className="w-4 h-4 text-slate-300" />
-                        )}
-                      </button>
-                      <span className="text-xs font-semibold text-slate-800">
-                        Daily match summaries
-                      </span>
-                    </label>
-                  </div>
-                </div>
-              </div>
-            </div>
           </main>
         )}
       </div>
