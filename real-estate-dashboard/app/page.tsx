@@ -325,8 +325,11 @@ export default function MalikPropertyDashboard() {
       const invRes = await fetch(`${API_BASE_URL}/api/inventory`);
       if (invRes.ok) {
         const invData = await invRes.json();
+        const listingsArray = Array.isArray(invData)
+          ? invData
+          : invData.items || [];
         setDemandedListings(
-          invData.slice(0, 3).map((item: any, idx: number) => ({
+          listingsArray.slice(0, 3).map((item: any, idx: number) => ({
             ...item,
             tag: idx === 0 ? "High Demand" : "Trending",
             statText: `${12 + idx * 4}% request surge this week`,

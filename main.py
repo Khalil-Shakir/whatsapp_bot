@@ -427,8 +427,37 @@ def get_dashboard_overview():
 async def get_bot_activities():
     return state_manager.recent_activities
 
+@app.get("/api/property-matches")
+async def get_property_matches():
+    # Return matched pairs between leads and inventory listings
+    return [
+        {
+            "id": 1,
+            "matchScore": 95,
+            "lead": {
+                "name": "James Wilson",
+                "initials": "JW",
+                "source": "WhatsApp",
+                "lastActive": "10m ago",
+                "budget": "$850k - $1.2M",
+                "type": "Villa",
+                "location": "Metropolis",
+                "status": "HOT LEAD",
+            },
+            "property": {
+                "title": "Modern Luxury Villa",
+                "price": "$950,000",
+                "tag": "High Match",
+                "image": "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?w=500&auto=format&fit=crop&q=80",
+                "beds": 4,
+                "baths": 3,
+                "sqft": 3200,
+            },
+        }
+    ]
+
 @app.get("/api/inventory", response_model=Dict[str, Any])
-async def get_inventory(page: int, limit: int = 6):
+async def get_inventory(page: int = 1, limit: int = 6):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
