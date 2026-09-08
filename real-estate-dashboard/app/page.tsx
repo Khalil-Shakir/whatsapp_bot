@@ -484,6 +484,7 @@ export default function MalikPropertyDashboard() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [visibleCount, setVisibleCount] = useState<number>(10);
   const [newProperty, setNewProperty] = useState({
     title: "",
     price: "",
@@ -774,6 +775,9 @@ export default function MalikPropertyDashboard() {
     a.click();
   };
 
+  useEffect(() => {
+    setVisibleCount(10);
+  }, [leadStatusFilter, intentFilter, propertyTypeFilter]);
   useEffect(() => {
     if (activeTab === "Dashboard") {
       fetchDashboardMetrics();
@@ -1414,7 +1418,7 @@ export default function MalikPropertyDashboard() {
                 </div>
               ) : (
                 /* Real Dynamic Leads Row Mapping */
-                filteredLeads.map((lead) => (
+                filteredLeads.slice(0, visibleCount).map((lead) => (
                   <div
                     key={lead.id}
                     className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs hover:border-slate-300 transition-all grid grid-cols-12 items-center"
@@ -1522,10 +1526,14 @@ export default function MalikPropertyDashboard() {
               )}
 
               {/* Footer Load Control */}
-              {!loading && filteredLeads.length > 0 && (
+              {!loading && filteredLeads.length > visibleCount && (
                 <div className="pt-6 text-center">
-                  <button className="text-xs font-bold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1.5 transition-colors cursor-pointer">
-                    Load More Leads <ChevronDown className="w-3.5 h-3.5" />
+                  <button
+                    onClick={() => setVisibleCount((prev) => prev + 10)}
+                    className="text-xs font-bold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    Load More Leads ({filteredLeads.length - visibleCount}{" "}
+                    remaining) <ChevronDown className="w-3.5 h-3.5" />
                   </button>
                 </div>
               )}
