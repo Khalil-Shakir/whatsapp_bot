@@ -584,9 +584,14 @@ export default function MalikPropertyDashboard() {
   const filteredInventory = useMemo(() => {
     return inventory
       .filter((item) => {
+        const effectiveSearch = (searchTerm || searchQuery)
+          .toLowerCase()
+          .trim();
         const matchesSearch =
-          item.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          item.location.toLowerCase().includes(searchTerm.toLowerCase());
+          !effectiveSearch ||
+          item.title.toLowerCase().includes(effectiveSearch) ||
+          item.location.toLowerCase().includes(effectiveSearch) ||
+          item.type.toLowerCase().includes(effectiveSearch);
         const matchesStatus =
           statusFilter === "ALL" || item.status === statusFilter;
         const matchesType = typeFilter === "ALL" || item.type === typeFilter;
@@ -782,37 +787,55 @@ export default function MalikPropertyDashboard() {
   };
 
   const filteredLeads = useMemo(() => {
-    return pipeLeads.filter((lead) => {
-      // Extract properties safely handling both camelCase and snake_case
-      const leadStatus = lead.status?.toString().toUpperCase() || "";
-      const leadIntent = lead.intent?.toString().toUpperCase() || "";
-      const leadPropType = (lead.propertyType || lead.propertyType || "")
-        .toString()
-        .toLowerCase();
+    const query = (searchQuery || searchTerm).trim().toLowerCase();
 
-      // 1. Status Filter Check
+    return pipeLeads.filter((lead) => {
+      // Safely extract string fields
+      const leadName = (lead.name || "").toString().toLowerCase();
+      const leadPhone = (lead.phone || "").toString().toLowerCase();
+      const leadIntent = (lead.intent || "").toString().toLowerCase();
+      const leadPropType = (lead.propertyType || "").toString().toLowerCase();
+
+      // 1. Search Query Check
+      const matchesSearch =
+        !query ||
+        leadName.includes(query) ||
+        leadPhone.includes(query) ||
+        leadIntent.includes(query) ||
+        leadPropType.includes(query);
+
+      // 2. Status Filter Check
+      const leadStatus = (lead.status || "").toString().toUpperCase();
       const matchesStatus =
         leadStatusFilter === "All Statuses" ||
         leadStatus === leadStatusFilter.toUpperCase();
 
-      // 2. Intent Filter Check
+      // 3. Intent Filter Check
       const rawIntent = (lead.intent || "").toString().trim().toUpperCase();
       const selectedIntent = intentFilter.trim().toUpperCase();
-
       const matchesIntent =
         intentFilter === "Buying & Selling" ||
         intentFilter === "All Intents" ||
         rawIntent === selectedIntent ||
         rawIntent.includes(selectedIntent);
 
-      // 3. Property Type Check
+      // 4. Property Type Check
       const matchesPropertyType =
         propertyTypeFilter === "All Types" ||
         leadPropType === propertyTypeFilter.toLowerCase();
 
-      return matchesStatus && matchesIntent && matchesPropertyType;
+      return (
+        matchesSearch && matchesStatus && matchesIntent && matchesPropertyType
+      );
     });
-  }, [pipeLeads, leadStatusFilter, intentFilter, propertyTypeFilter]);
+  }, [
+    pipeLeads,
+    searchQuery,
+    searchTerm,
+    leadStatusFilter,
+    intentFilter,
+    propertyTypeFilter,
+  ]);
 
   console.log("Active Filters:", {
     leadStatusFilter,
@@ -1089,17 +1112,6 @@ export default function MalikPropertyDashboard() {
           </h2>
 
           <div className="flex items-center gap-4">
-            <div className="relative">
-              <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Search leads, phone numbers..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="bg-slate-50 border border-slate-200 rounded-lg pl-9 pr-4 py-1.5 text-xs text-slate-700 w-80 focus:outline-none focus:ring-1 focus:ring-slate-400 focus:bg-white transition-all"
-              />
-            </div>
-
             <button className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-full transition-colors">
               <Bell className="w-4 h-4" />
             </button>
@@ -1471,19 +1483,48 @@ export default function MalikPropertyDashboard() {
                 <div className="col-span-2">Status</div>
                 <div className="col-span-1 text-right">Actions</div>
               </div>
-
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search leads by name, phone, or intent..."
+                  value={searchTerm || searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setSearchTerm(e.target.value);
+                  }}
+                  className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-slate-900/10 text-slate-900 placeholder:text-slate-400"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => {
+                      setSearchQuery("");
+                      setSearchTerm("");
+                    }}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-slate-600"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
               {/* Loading state skeleton */}
               {loading ? (
                 <div className="bg-white p-8 rounded-xl border border-slate-200 text-center font-medium text-slate-500">
                   Loading live leads...
                 </div>
               ) : filteredLeads.length === 0 ? (
-                /* Empty state */
-                <div className="bg-white p-12 rounded-xl border border-slate-200 text-center space-y-1">
-                  <h4 className="font-bold text-slate-800">No leads found</h4>
-                  <p className="text-xs text-slate-500">
-                    No WhatsApp leads match your selected filters.
+                <div className="text-center py-12 bg-white rounded-2xl border border-slate-100">
+                  <p className="text-sm font-medium text-slate-500">
+                    No leads found matching "{searchQuery}"
                   </p>
+                  {searchQuery && (
+                    <button
+                      onClick={() => setSearchQuery("")}
+                      className="mt-2 text-xs font-semibold text-slate-900 hover:underline"
+                    >
+                      Clear Search
+                    </button>
+                  )}
                 </div>
               ) : (
                 /* Real Dynamic Leads Row Mapping */
@@ -1933,7 +1974,10 @@ export default function MalikPropertyDashboard() {
                     type="text"
                     placeholder="Search by address, MLS, or client..."
                     value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
+                    onChange={(e) => {
+                      setSearchTerm(e.target.value);
+                      setSearchQuery(e.target.value);
+                    }}
                     className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-slate-900/10"
                   />
                 </div>
