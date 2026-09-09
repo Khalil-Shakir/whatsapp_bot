@@ -650,23 +650,40 @@ async def delete_inventory_item(item_id: int):
     })
 
     return {"status": "success", "item_id": item_id}
-
 @app.post("/api/inventory")
 async def create_property(
     title: str = Form(...),
-    price: str = Form(...),
+    price: Optional[str] = Form(""),
     type: str = Form(...),
     location: str = Form(...),
-    beds: int = Form(0),
-    baths: int = Form(0),
-    sqft: int = Form(0),
+    # UPGRADE: Use Optional[Any] or string types for number fields 
+    # so empty form fields from the frontend don't trigger a 422 error.
+    beds: Optional[Any] = Form(0),
+    baths: Optional[Any] = Form(0),
+    sqft: Optional[Any] = Form(0),
     status: str = Form("AVAILABLE"),
-    dateAdded: str = Form(...),
+    dateAdded: Optional[str] = Form(""),
+    price_per_marla: Optional[Any] = Form(0.0),
+    marlas: Optional[Any] = Form(0.0),
     file: Optional[UploadFile] = File(None),
 ):
+    # Safely parse numbers to prevent type conversion errors
+    try:
+        beds_val = int(beds) if beds not in [None, ""] else 0
+        baths_val = int(baths) if baths not in [None, ""] else 0
+        sqft_val = int(sqft) if sqft not in [None, ""] else 0
+        ppm_val = float(price_per_marla) if price_per_marla not in [None, ""] else 0.0
+        marlas_val = float(marlas) if marlas not in [None, ""] else 0.0
+    except ValueError:
+        beds_val, baths_val, sqft_val, ppm_val, marlas_val = 0, 0, 0, 0.0, 0.0
+
+    total_calculated_price = ppm_val * marlas_val
+    final_price = price if price else (f"PKR {total_calculated_price:,.0f}" if total_calculated_price > 0 else "Contact Agent")
+    
+    final_date = dateAdded if dateAdded else datetime.now().strftime("%b %d, %Y")
     image_url = "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?w=600&auto=format&fit=crop"
 
-    if file:
+    if file and file.filename:
         file_path = os.path.join(UPLOAD_DIR, file.filename)
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
@@ -675,12 +692,15 @@ async def create_property(
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
+        
+        # UPGRADE: Fixed SQL placeholder count. 
+        # Exactly 12 placeholders matching your 12 columns and parameters!
         cursor.execute(
             """
-            INSERT INTO inventory (title, price, type, location, beds, baths, sqft, status, date_added, image)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO inventory (title, price, type, location, beds, baths, sqft, status, date_added, image, price_per_marla, marlas)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (title, price, type, location, beds, baths, sqft, status, dateAdded, image_url),
+            (title, final_price, type, location, beds_val, baths_val, sqft_val, status, final_date, image_url, ppm_val, marlas_val),
         )
         item_id = cursor.lastrowid
         conn.commit()
@@ -689,14 +709,14 @@ async def create_property(
         item = {
             "id": item_id,
             "title": title,
-            "price": price,
+            "price": final_price,
             "type": type,
             "location": location,
-            "beds": beds,
-            "baths": baths,
-            "sqft": sqft,
+            "beds": beds_val,
+            "baths": baths_val,
+            "sqft": sqft_val,
             "status": status,
-            "dateAdded": dateAdded,
+            "dateAdded": final_date,
             "image": image_url,
         }
         await state_manager.broadcast({"event": "INVENTORY_UPDATED", "item": item})

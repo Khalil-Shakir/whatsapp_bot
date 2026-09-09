@@ -585,6 +585,8 @@ export default function MalikPropertyDashboard() {
     beds: "0",
     baths: "0",
     sqft: "2500",
+    price_per_marla: "",
+    marlas: "",
   });
 
   const fetchInventory = async (page: number = inventoryPage) => {
@@ -735,19 +737,19 @@ export default function MalikPropertyDashboard() {
     try {
       const formattedLocation = `${newProperty.address}${newProperty.address ? ", " : ""}${newProperty.city}${newProperty.city && newProperty.district ? ", " : ""}${newProperty.district}`;
 
-      // Use FormData to send both text fields and binary media to FastAPI
       const formData = new FormData();
       formData.append("title", newProperty.title);
-      formData.append(
-        "price",
-        `$${Number(newProperty.price || 0).toLocaleString()}`,
-      );
       formData.append("type", newProperty.propertyType);
       formData.append("location", formattedLocation);
       formData.append("beds", newProperty.beds);
       formData.append("baths", newProperty.baths);
       formData.append("sqft", newProperty.sqft);
       formData.append("status", "AVAILABLE");
+
+      // ✨ Append the new Marla fields here so the backend gets them!
+      formData.append("price_per_marla", newProperty.price_per_marla || "0");
+      formData.append("marlas", newProperty.marlas || "0");
+
       formData.append(
         "dateAdded",
         new Date().toLocaleDateString("en-US", {
@@ -763,7 +765,7 @@ export default function MalikPropertyDashboard() {
 
       const response = await fetch(`${API_BASE_URL}/api/inventory`, {
         method: "POST",
-        body: formData, // Browser automatically sets `multipart/form-data` header
+        body: formData,
       });
 
       if (response.ok) {
@@ -780,6 +782,8 @@ export default function MalikPropertyDashboard() {
           beds: "0",
           baths: "0",
           sqft: "2500",
+          price_per_marla: "",
+          marlas: "",
         });
         fetchInventory();
       }
@@ -2320,20 +2324,22 @@ export default function MalikPropertyDashboard() {
                           />
                         </div>
 
+                        {/* Marla & Price breakdown */}
                         <div className="grid grid-cols-2 gap-4">
                           <div>
                             <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-800 mb-1.5">
-                              Price ($)
+                              Price / Marla (PKR)
                             </label>
                             <input
-                              type="text"
+                              type="number"
                               required
-                              placeholder="e.g. 1500000"
-                              value={newProperty.price}
+                              step="any"
+                              placeholder="e.g. 500000"
+                              value={newProperty.price_per_marla || ""}
                               onChange={(e) =>
                                 setNewProperty({
                                   ...newProperty,
-                                  price: e.target.value,
+                                  price_per_marla: e.target.value,
                                 })
                               }
                               className="w-full px-3.5 py-2.5 border border-slate-300 rounded-lg text-xs font-normal text-slate-800 placeholder-slate-400 focus:outline-none focus:border-slate-800 focus:ring-1 focus:ring-slate-800"
@@ -2342,30 +2348,67 @@ export default function MalikPropertyDashboard() {
 
                           <div>
                             <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-800 mb-1.5">
-                              Property Type
+                              Total Marlas
                             </label>
-                            <div className="relative">
-                              <select
-                                required
-                                value={newProperty.propertyType}
-                                onChange={(e) =>
-                                  setNewProperty({
-                                    ...newProperty,
-                                    propertyType: e.target.value,
-                                  })
-                                }
-                                className="w-full px-3.5 py-2.5 border border-slate-300 rounded-lg text-xs font-normal text-slate-800 bg-white appearance-none focus:outline-none focus:border-slate-800 focus:ring-1 focus:ring-slate-800"
-                              >
-                                <option value="" disabled>
-                                  Select type
-                                </option>
-                                <option value="Villa">Villa</option>
-                                <option value="Apartment">Apartment</option>
-                                <option value="Commercial">Commercial</option>
-                                <option value="House">House</option>
-                              </select>
-                              <ChevronDown className="w-4 h-4 text-slate-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                            </div>
+                            <input
+                              type="number"
+                              required
+                              step="any"
+                              placeholder="e.g. 5, 10, 20"
+                              value={newProperty.marlas || ""}
+                              onChange={(e) =>
+                                setNewProperty({
+                                  ...newProperty,
+                                  marlas: e.target.value,
+                                })
+                              }
+                              className="w-full px-3.5 py-2.5 border border-slate-300 rounded-lg text-xs font-normal text-slate-800 placeholder-slate-400 focus:outline-none focus:border-slate-800 focus:ring-1 focus:ring-slate-800"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Auto calculated total price display banner */}
+                        {newProperty.price_per_marla && newProperty.marlas && (
+                          <div className="p-3 bg-slate-100 rounded-lg flex justify-between items-center text-xs">
+                            <span className="font-medium text-slate-600">
+                              Calculated Total Price:
+                            </span>
+                            <span className="font-bold text-slate-900">
+                              PKR{" "}
+                              {(
+                                Number(newProperty.price_per_marla) *
+                                Number(newProperty.marlas)
+                              ).toLocaleString()}
+                            </span>
+                          </div>
+                        )}
+
+                        <div>
+                          <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-800 mb-1.5">
+                            Property Type
+                          </label>
+                          <div className="relative">
+                            <select
+                              required
+                              value={newProperty.propertyType}
+                              onChange={(e) =>
+                                setNewProperty({
+                                  ...newProperty,
+                                  propertyType: e.target.value,
+                                })
+                              }
+                              className="w-full px-3.5 py-2.5 border border-slate-300 rounded-lg text-xs font-normal text-slate-800 bg-white appearance-none focus:outline-none focus:border-slate-800 focus:ring-1 focus:ring-slate-800"
+                            >
+                              <option value="" disabled>
+                                Select type
+                              </option>
+                              <option value="Villa">Villa</option>
+                              <option value="Apartment">Apartment</option>
+                              <option value="Commercial">Commercial</option>
+                              <option value="House">House</option>
+                              <option value="Plot">Plot</option>
+                            </select>
+                            <ChevronDown className="w-4 h-4 text-slate-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                           </div>
                         </div>
                       </div>
@@ -2502,6 +2545,7 @@ export default function MalikPropertyDashboard() {
                           </div>
                         </div>
                       </div>
+
                       {/* Section 4: Media */}
                       <div className="space-y-4">
                         <div className="border-b border-slate-200 pb-1">

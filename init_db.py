@@ -24,10 +24,6 @@ CREATE TABLE IF NOT EXISTS leads (
     last_interaction TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """)
-try:
-    cursor.execute("ALTER TABLE leads ADD COLUMN location TEXT DEFAULT '' ")
-except sqlite3.OperationalError:
-    pass  # Column already exists
 
 cursor.execute("""
         CREATE TABLE IF NOT EXISTS inventory (
@@ -41,9 +37,16 @@ cursor.execute("""
             sqft INTEGER DEFAULT 0,
             status TEXT DEFAULT 'AVAILABLE',
             date_added TEXT NOT NULL,
+            price_per_marla REAL,
+            marlas REAL
             image TEXT
         )
     """)
+try:
+    cursor.execute("ALTER TABLE inventory ADD COLUMN price_per_marla REAL DEFAULT 0.0;")
+    cursor.execute("ALTER TABLE inventory ADD COLUMN marlas REAL DEFAULT 0.0;")
+except sqlite3.OperationalError:
+    pass  # Column already exists
 
 conn.commit()
 conn.close()
