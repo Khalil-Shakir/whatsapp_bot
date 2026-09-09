@@ -593,7 +593,7 @@ export default function MalikPropertyDashboard() {
       if (res.ok) {
         const data = await res.json();
         setInventory(data.items || []);
-        setTotalPages(data.totalPages || 1);
+        setTotalPages(data.total_pages || 1); // Fixed key mapping from totalPages to total_pages matching backend
       }
     } catch (err) {
       console.warn("Could not connect to inventory API at 127.0.0.1:8000.");
@@ -886,19 +886,6 @@ export default function MalikPropertyDashboard() {
     intentFilter,
     propertyTypeFilter,
   ]);
-
-  console.log("Active Filters:", {
-    leadStatusFilter,
-    intentFilter,
-    propertyTypeFilter,
-  });
-  console.log(
-    "Sample Lead Fields:",
-    pipeLeads[0]
-      ? { status: pipeLeads[0].status, intent: pipeLeads[0].intent }
-      : "No leads",
-  );
-
   const exportCSV = () => {
     if (pipelineLeads.length === 0) return;
     const headers = [
@@ -1084,7 +1071,12 @@ export default function MalikPropertyDashboard() {
       addedTime: "Added 5h ago",
     },
   ];
-
+  console.log(
+    "Current inventoryPage:",
+    inventoryPage,
+    "Total Pages:",
+    totalPages,
+  );
   return (
     <div
       className="flex h-screen bg-[#f8fafc] text-slate-800 font-sans overflow-hidden"

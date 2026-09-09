@@ -1,4 +1,4 @@
-import os, re
+import os, re, math
 import shutil
 import logging
 import sqlite3
@@ -131,29 +131,33 @@ async def toggle_lead_bot(lead_id: int, payload: ToggleBotPayload):
     return {"status": "success", "lead_id": lead_id, "bot_enabled": payload.enabled}
 
 @app.patch("/api/inventory/{item_id}/status")
-async def updateInventoryItemStatus(item_id: int, payload: UpdateInventoryStatusPayload):
+async def update_inventory_item_status(item_id: int, payload: UpdateInventoryStatusPayload):
     valid_statuses = ["AVAILABLE", "PENDING", "SOLD"]
     new_status = payload.status.upper()
 
-    if not new_status in valid_statuses:
+    if new_status not in valid_statuses:
         raise HTTPException(status_code=400, detail="Invalid status value")
 
-    connect = get_db_connection()
-    cursor = connect.cursor()
-    cursor.execute("UPDATE inventory SET status = ? WHERE id = ?",(new_status, item_id))
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE inventory SET status = ? WHERE id = ?", (new_status, item_id))
+    conn.commit()
 
     if cursor.rowcount == 0:
-        connect.close()
+        conn.close()
         raise HTTPException(status_code=404, detail="Inventory item not found")
 
-    connect.close()
+    cursor.execute("SELECT * FROM inventory WHERE id = ?", (item_id,))
+    updated_item_row = cursor.fetchone()
+    conn.close()
 
     await state_manager.add_activity({
-        "type" : "action",
-        "text" : f"Property listing #{item_id} status updated to ",
+        "type": "action",
+        "text": f"Property listing #{item_id} status updated to",
         "highlightText": new_status,
         "time": "JUST NOW"
     })
+
     return {"status": "success", "item_id": item_id, "new_status": new_status}
 
 app.add_middleware(
@@ -474,7 +478,8 @@ async def get_property_matches():
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
-        cursor.execute("SELECT * FROM leads ORDER BY id DESC")
+        # Exclude leads with a CLOSED status from the matching pipeline
+        cursor.execute("SELECT * FROM leads WHERE UPPER(COALESCE(status, 'NEW')) != 'CLOSED' ORDER BY id DESC")
         raw_leads = [dict(row) for row in cursor.fetchall()]
 
         cursor.execute("SELECT * FROM inventory WHERE UPPER(status) = 'AVAILABLE'")
@@ -567,7 +572,6 @@ async def get_property_matches():
     except Exception as e:
         logger.error(f"Failed to calculate property matches: {str(e)}")
         return []
-
 class ProposalRequest(BaseModel):
     lead_id: int
     phone: str
@@ -596,8 +600,8 @@ async def get_inventory(page: int = 1, limit: int = 6):
         conn = get_db_connection()
         cursor = conn.cursor()
         offset = (page-1)*limit
-        cursor.execute("SELECT COUNT(*) FROM inventory")
-        total_items = cursor.fetchone()[0] or 0
+        total_items = cursor.execute("SELECT COUNT(*) FROM inventory").fetchone()[0]
+        total_pages = math.ceil(total_items / limit)
         cursor.execute("SELECT * FROM inventory ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset))
         rows = cursor.fetchall()
         conn.close()
@@ -623,7 +627,7 @@ async def get_inventory(page: int = 1, limit: int = 6):
             "total_items": total_items,
             "page": page,
             "limit": limit,
-            "total_pages": (total_items + limit - 1) // limit if limit > 0 else 1
+            "total_pages": total_pages
         }
     except Exception as e:
         logger.error(f"Error in GET /api/inventory: {e}")
