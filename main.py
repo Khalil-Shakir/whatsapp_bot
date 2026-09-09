@@ -284,6 +284,7 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         state_manager.disconnect_ws(websocket)
+
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -306,12 +307,29 @@ def init_db():
         CREATE TABLE IF NOT EXISTS leads (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT,
+            phone_number TEXT UNIQUE,
             phone TEXT,
             intent TEXT,
             property_type TEXT,
+            budget_min REAL,
+            budget_max REAL,
             budget TEXT,
+            area TEXT,
+            location TEXT,
             status TEXT DEFAULT 'NEW',
+            bot_enabled INTEGER DEFAULT 1,
+            last_interaction TEXT,
             added_time TEXT
+        )
+    """)
+    # New table for chat history memory
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chat_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            lead_id INTEGER NOT NULL,
+            sender TEXT NOT NULL,
+            message TEXT NOT NULL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.commit()
@@ -435,7 +453,6 @@ def get_dashboard_overview():
             "hot_leads": []
         }
 
-    
 @app.get("/api/dashboard/bot-activities")
 async def get_bot_activities():
     return state_manager.recent_activities
@@ -444,7 +461,6 @@ def parse_price(price_str: str) -> float:
     """Helper function to parse numeric values from price strings."""
     if not price_str:
         return 0.0
-    # Strip currency indicators, commas, and letters
     cleaned = re.sub(r"[^\d.]", "", str(price_str))
     try:
         return float(cleaned)
@@ -458,7 +474,6 @@ async def get_property_matches():
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
-        # Fetch leads and inventory
         cursor.execute("SELECT * FROM leads ORDER BY id DESC")
         raw_leads = [dict(row) for row in cursor.fetchall()]
 
@@ -481,7 +496,6 @@ async def get_property_matches():
             lead_type = (lead.get("property_type") or "").strip().lower()
             lead_intent = (lead.get("intent") or "Buying").strip().upper()
             
-            # Retrieve numeric budget values
             b_min = lead.get("budget_min")
             b_max = lead.get("budget_max")
             fallback_budget = lead.get("budget")
@@ -493,14 +507,12 @@ async def get_property_matches():
                 prop_type = (prop.get("type") or "").strip().lower()
                 prop_price_val = parse_price(prop.get("price"))
 
-                score = 50  # Base match score
+                score = 50
 
-                # Match property type
                 if lead_type and prop_type:
                     if lead_type in prop_type or prop_type in lead_type:
                         score += 25
 
-                # Match budget range
                 if b_min is not None or b_max is not None:
                     min_val = b_min if b_min is not None else 0
                     max_val = b_max if b_max is not None else float("inf")
@@ -517,7 +529,6 @@ async def get_property_matches():
                     highest_score = score
                     best_match = prop
 
-            # Format result if a match is determined
             if best_match and highest_score >= 60:
                 matches.append({
                     "id": f"match-{lead_id}-{best_match.get('id')}",
@@ -550,7 +561,6 @@ async def get_property_matches():
                     }
                 })
 
-        # Sort matches so the top recommended pair appears first
         matches.sort(key=lambda x: x["matchScore"], reverse=True)
         return matches
 
@@ -568,18 +578,13 @@ class ProposalRequest(BaseModel):
 @app.post("/api/send-proposal")
 async def send_proposal(req: ProposalRequest):
     try:
-        # Construct proposal text message
         message = (
             f"Hello! We found a property matching your requirements:\n\n"
             f"🏠 *{req.property_title}*\n"
             f"💰 Price: {req.price}\n\n"
             f"Let us know if you would like to schedule a visit or receive more details!"
         )
-        
-        # Call your existing WhatsApp Bot dispatch logic / SQLite log update
         logger.info(f"Sending proposal to {req.phone} for Property ID {req.property_id}")
-        
-        # Return success response
         return {"status": "success", "message": "Proposal dispatched successfully."}
     except Exception as e:
         logger.error(f"Error sending proposal: {str(e)}")
@@ -617,8 +622,8 @@ async def get_inventory(page: int = 1, limit: int = 6):
             "items": items,
             "total_items": total_items,
             "page": page,
-            "limit":limit,
-            "total_pages": ()
+            "limit": limit,
+            "total_pages": (total_items + limit - 1) // limit if limit > 0 else 1
         }
     except Exception as e:
         logger.error(f"Error in GET /api/inventory: {e}")
@@ -700,33 +705,6 @@ async def create_property(
         logger.error(f"Error saving to inventory: {e}")
         return {"error": "Failed to add inventory item"}
 
-def get_all_leads():
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM leads ORDER BY id DESC")
-        rows = cursor.fetchall()
-        conn.close()
-
-        leads_list = []
-        for row in rows:
-            leads_list.append(
-                {
-                    "id": row["id"],
-                    "name": row["name"] or row["phone_number"] or "New Lead",
-                    "phone": row["phone_number"] or "N/A",
-                    "intent": (row["intent"] or "AWAITING INFO").upper(),
-                    "propertyType": row["property_type"] or "N/A",
-                    "budget": f"PKR {row['budget_min'] or 0}",
-                    "status": (row["status"] or "NEW").upper(),
-                    "addedTime": row["last_interaction"] or "Just now",
-                }
-            )
-        return leads_list
-    except Exception as e:
-        print(f"❌ Error during /api/leads: {str(e)}")
-        return []
-
 @app.get("/api/leads")
 async def get_leads():
     try:
@@ -740,14 +718,12 @@ async def get_leads():
         for r in rows:
             keys = r.keys()
 
-            # Handle phone vs phone_number
             phone = (
                 r["phone_number"]
-                if "phone_number" in keys
+                if "phone_number" in keys and r["phone_number"]
                 else (r["phone"] if "phone" in keys else "N/A")
             )
 
-            # Format budget from budget_min / budget_max or fallback to budget
             if "budget_min" in keys and r["budget_min"] is not None:
                 budget = f"PKR {r['budget_min']:,.0f}"
                 if (
@@ -759,18 +735,13 @@ async def get_leads():
             else:
                 budget = r["budget"] if "budget" in keys and r["budget"] else "N/A"
 
-            # Handle last_interaction / created_at / added_time
             added_time = (
                 r["last_interaction"]
                 if "last_interaction" in keys and r["last_interaction"]
                 else (
-                    r["created_at"]
-                    if "created_at" in keys and r["created_at"]
-                    else (
-                        r["added_time"]
-                        if "added_time" in keys and r["added_time"]
-                        else "Recently"
-                    )
+                    r["added_time"]
+                    if "added_time" in keys and r["added_time"]
+                    else "Recently"
                 )
             )
 
@@ -795,15 +766,8 @@ async def get_leads():
         logger.error(f"Error fetching leads: {e}")
         return []
 
-#Bot functionlity#
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "leads.db")
+# Bot functionality
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-
-def get_db_connection():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
 
 def format_pk_phone(phone_user: str) -> str:
     digits = "".join(filter(str.isdigit, str(phone_user)))
@@ -811,9 +775,8 @@ def format_pk_phone(phone_user: str) -> str:
         return "0" + digits[2:]
     return digits
 
-
 def get_create_lead(phone: str) -> int:
-    conn = sqlite3.connect("leads.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
         """
@@ -829,14 +792,12 @@ def get_create_lead(phone: str) -> int:
     conn.close()
     return lead_id
 
-
 def get_lead_state(lead_id: int) -> dict:
-    conn = sqlite3.connect("leads.db")
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
         """
-        SELECT phone_number, name, intent, property_type, budget_min, budget_max, status 
+        SELECT phone_number, name, intent, property_type, budget_min, budget_max, area, location, status 
         FROM leads WHERE id = ?
         """,
         (lead_id,),
@@ -845,11 +806,9 @@ def get_lead_state(lead_id: int) -> dict:
     conn.close()
     return dict(row) if row else {}
 
-
 def sanitize_intent(intent_str: str) -> str:
     valid_intents = ["BUYING", "SELLING", "RENT"]
     return intent_str if intent_str in valid_intents else "AWAITING INFO"
-
 
 def update_lead(
     lead_id: int,
@@ -862,7 +821,7 @@ def update_lead(
     location: str = None,
     status: str = None,
 ):
-    conn = sqlite3.connect("leads.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
 
     cursor.execute(
@@ -884,7 +843,6 @@ def update_lead(
     conn.commit()
     conn.close()
 
-
 def is_bot_enabled_for_lead(lead_id: int) -> bool:
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -894,13 +852,50 @@ def is_bot_enabled_for_lead(lead_id: int) -> bool:
     
     if row and row["bot_enabled"] is not None:
         return bool(row["bot_enabled"])
-    return True # Default to enabled if not explicitly set
+    return True
+
+# Helper functions for Chat Memory
+def save_chat_message(lead_id: int, sender: str, message: str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO chat_history (lead_id, sender, message) VALUES (?, ?, ?)",
+        (lead_id, sender, message),
+    )
+    conn.commit()
+    conn.close()
+
+def get_chat_history(lead_id: int, limit: int = 10) -> list:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT sender, message FROM chat_history WHERE lead_id = ? ORDER BY id DESC LIMIT ?",
+        (lead_id, limit),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    
+    history = []
+    for r in reversed(rows):
+        role = "user" if r["sender"] == "user" else "assistant"
+        history.append({"role": role, "content": r["message"]})
+    return history
 
 @client.event(MessageEv)
 def on_message(client: NewClient, message: MessageEv):
+    chat_jid = str(message.Info.MessageSource.Chat).lower()
+    sender_jid = str(message.Info.MessageSource.Sender).lower()
     if message.Info.MessageSource.IsFromMe:
         return
 
+    if "status@broadcast" in chat_jid or "status@broadcast" in sender_jid or "broadcast" in chat_jid:
+        print("⏭️ Status/Broadcast update ignored.")
+        return
+
+    if chat_jid.endswith("@g.us") or sender_jid.endswith("@g.us"):
+        print("⏭️ Group message ignored.")
+        return
+    
     msg_data = message.Message
     text = (
         msg_data.conversation
@@ -932,62 +927,84 @@ def on_message(client: NewClient, message: MessageEv):
         state_manager.add_activity(user_activity),
         loop
     )
+
     try:
         lead_id = get_create_lead(clean_phone)
         if not is_bot_enabled_for_lead(lead_id):
             print(f"⏸️ Bot is paused for lead #{lead_id} ({clean_phone}). Skipping AI response.")
             return
+
+        # Save incoming user message to chat history
+        save_chat_message(lead_id, "user", text)
+
         current_state = get_lead_state(lead_id)
+        is_returning_lead = bool(
+            current_state.get("intent")
+            and current_state.get("intent") != "AWAITING INFO"
+            and current_state.get("property_type")
+        )
 
-        prompt = f"""
-        You are the AI Real Estate Assistant for Malik Property (Mianwali). Your goal is to politely collect property search or selling details while keeping a warm, natural tone in Urdu, Roman Urdu, or English.
+        system_prompt = f"""
+You are an ultra-smart, polite, empathetic, and professional AI Real Estate Consultant for Malik Property (Mianwali). 
+Your objective is to act like a natural human assistant (similar to Gemini/ChatGPT) and help clients gracefully in Urdu, Roman Urdu, or English.
 
-        CURRENT EXTRACTED CLIENT STATE:
-        {json.dumps(current_state, indent=2)}
+DATABASE SAVED CLIENT PROFILE:
+{json.dumps(current_state, indent=2)}
 
-        INCOMING MESSAGE: "{text}"
+IS RETURNING LEAD: {is_returning_lead}
 
-        ==================================================
-        DATA EXTRACTION GUIDELINES:
-        1. Intent Mapping (MUST be one of these exact values):
-        - "BUYING": Looking to buy property.
-        - "SELLING": Looking to sell property.
-        - "RENT": Looking to rent property.
+==================================================
+CONVERSATIONAL & INTELLIGENCE RULES:
+1. GEMINI-LIKE HUMAN BEHAVIOR:
+   - Speak naturally like a real consultant, NOT a robotic survey bot.
+   - Do NOT ask multiple questions in a single response. Ask a maximum of ONE follow-up question if required.
+   - NEVER re-ask for details that are already present in the DATABASE SAVED CLIENT PROFILE.
 
-        2. Fields to Extract:
-        - name: Client's full or first name.
-        - property_type: Commercial, Residential, Plot, House, Agriculture.
-        - budget_min: Minimum budget numeric value (in PKR, handle "lakh" / "crore" conversions if applicable).
-        - budget_max: Maximum budget numeric value (in PKR, handle "lakh" / "crore" conversions if applicable).
-        - area: "Extract area/size (e.g. '10 Marla', '5 Marla', '2 kanal')
-        "location": Extract the location where the lead is interested (e.g 'Mianwali', 'DHA Phase 6 mianwali', 'Lahore sadar bazar')
-        - status: Set to "NEW", "FOLLOW UP", or "CLOSED".
+2. RETURNING LEAD FLOW:
+   - If IS RETURNING LEAD is True, acknowledge them warmly (e.g. mention their name or previous preference if saved).
+   - Ask how you can assist them today (e.g. checking progress, modifying budget/location, or looking at new options).
 
-        3. Conversational & Language Rules:
-        - DO NOT re-ask details already saved in CURRENT EXTRACTED CLIENT STATE.
-        - Strict Urdu Vocabulary Enforcement:
-            ❌ Banned Words (Hindi): swagat, namaste, kripya, dhanyawad, pranam.
-            ✅ Allowed Equivalents: Khushamdeed, Assalam-o-Alaikum, Meherbani, Shukriya.
+3. CHAT CLOSING LOGIC:
+   - If the client says closing/thanking words (e.g., "shukriya", "thank you", "ok", "theek hai", "allah hafiz", "bye"), DO NOT ask any questions!
+   - End the chat politely and gracefully (e.g., "Boht shukriya! Agar mazeed koi maloomat chahiye ho toh zaroor bataiyega. Allah Hafiz!").
 
-        ==================================================
-        Return ONLY a raw JSON object (no markdown, no ```json formatting):
-        {{
-        "reply": "Your response to the user asking for missing information or acknowledging details.",
-        "name": "extracted name or null",
-        "intent": "BUYING | SELLING | RENT | AWAITING INFO,
-        "property_type": "Plot/House/Commercial/etc or null",
-        "budget_min": float number or null,
-        "budget_max": float number or null,
-        "area": "Extract area/size (e.g. '10 Marla', '5 Marla', '2 kanal')"
-        "location": Extract the location where the lead is interested (e.g 'Mianwali', 'DHA Phase 6 mianwali', 'Lahore sadar bazar')
-        "status": "NEW | FOLLOW UP | CLOSED | null"
-        }}
-        """
+4. COMPLETE PROFILE HANDLING:
+   - If intent, property_type, budget, and location are all collected, confirm that our team will reach out with short-listed properties shortly and conclude questioning.
+
+5. LANGUAGE & VOCABULARY:
+   - Maintain pure Urdu/Roman Urdu.
+   ❌ Banned Words (Hindi): swagat, namaste, kripya, dhanyawad, pranam.
+   ✅ Allowed Equivalents: Khushamdeed, Assalam-o-Alaikum, Meherbani, Shukriya.
+
+6. DATA EXTRACTION FORMAT:
+   - intent: "BUYING" | "SELLING" | "RENT" | "AWAITING INFO"
+   - budget_min / budget_max: Convert values like "lakh" (100000) or "crore" (10000000) to raw numbers.
+   - status: Set to "FOLLOW UP" if core details are collected, else "NEW".
+
+==================================================
+Return ONLY a raw JSON object (no markdown, no ```json tags):
+{{
+    "reply": "Your natural Gemini-like conversational response.",
+    "name": "extracted name or null",
+    "intent": "BUYING | SELLING | RENT | AWAITING INFO",
+    "property_type": "string or null",
+    "budget_min": float or null,
+    "budget_max": float or null,
+    "area": "string or null",
+    "location": "string or null",
+    "status": "NEW | FOLLOW UP | CLOSED | null"
+}}
+"""
+
+        # Build multi-turn chat memory array for Groq API
+        messages = [{"role": "system", "content": system_prompt}]
+        chat_history = get_chat_history(lead_id, limit=8)
+        messages.extend(chat_history)
 
         try:
             chat_completion = groq_client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model="openai/gpt-oss-20b",
+                messages=messages,
+                model="openai/gpt-oss-120b",
                 temperature=0.3,
                 response_format={"type": "json_object"},
             )
@@ -1005,6 +1022,8 @@ def on_message(client: NewClient, message: MessageEv):
                 "property_type": None,
                 "budget_min": None,
                 "budget_max": None,
+                "area": None,
+                "location": None,
                 "status": "NEW",
             }
 
@@ -1023,15 +1042,20 @@ def on_message(client: NewClient, message: MessageEv):
         )
 
         reply_text = data.get("reply", "Shukriya! Malik Property se rabta karne ka.")
+        
+        # Save bot outgoing reply to chat history
+        save_chat_message(lead_id, "assistant", reply_text)
+
         client.send_message(to=sender_jid, message=reply_text)
         print(f"✅ Replied to {clean_phone}")
+
         bot_activity = {
-        "id": f"out-{message.Info.ID}",
-        "type": "bot",
-        "text": "Bot replied to",
-        "highlightText": clean_phone,
-        "targetText": f'"{reply_text}"',
-        "time": "JUST NOW"
+            "id": f"out-{message.Info.ID}",
+            "type": "bot",
+            "text": "Bot replied to",
+            "highlightText": clean_phone,
+            "targetText": f'"{reply_text}"',
+            "time": "JUST NOW"
         }
 
         asyncio.run_coroutine_threadsafe(
@@ -1039,12 +1063,8 @@ def on_message(client: NewClient, message: MessageEv):
             loop
         )
 
-
     except Exception as e:
         print(f"❌ Error during message processing: {e}")
-
-
-
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
