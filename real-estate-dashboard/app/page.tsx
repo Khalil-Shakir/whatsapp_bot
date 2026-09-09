@@ -228,20 +228,17 @@ export default function MalikPropertyDashboard() {
   const handleSendProposal = (match: any) => {
     try {
       setSendingProposalId(match.id);
-
-      // Extract and clean phone number
       const phone = match.lead?.phone || match.lead?.phone_number || "";
       const cleanNumber = phone.replace(/\D/g, "");
       const formattedPhone = cleanNumber.startsWith("0")
         ? `92${cleanNumber.slice(1)}`
         : cleanNumber;
-      // Extract property details
+
       const title = match.property?.title || "Property";
       const price = match.property?.price || "";
       const location = match.property?.location || "";
       const leadName = match.lead?.name || "there";
 
-      // Construct formatted premade template message
       const template =
         `Hello ${leadName},\n\n` +
         `Based on your preferences, here is a property match for you:\n\n` +
@@ -250,7 +247,6 @@ export default function MalikPropertyDashboard() {
         `${location ? `📍 Location: ${location}\n` : ""}\n` +
         `Let us know if you would like to schedule a viewing!`;
 
-      // Open WhatsApp Web/App in a new tab with the encoded message
       const whatsappUrl = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(template)}`;
       window.open(whatsappUrl, "_blank");
     } catch (error) {
@@ -1739,277 +1735,194 @@ export default function MalikPropertyDashboard() {
               </div>
 
               <div className="flex items-center gap-3">
-                <button className="px-3.5 py-1.5 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-xl flex items-center gap-2 shadow-xs transition-colors cursor-pointer">
-                  <SlidersHorizontal className="w-3.5 h-3.5" />
-                  Filter Leads
-                </button>
                 <button
                   onClick={() =>
                     setSortOrder(sortOrder === "highest" ? "lowest" : "highest")
                   }
-                  className="px-3.5 py-1.5 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-xl flex items-center gap-2 shadow-xs transition-colors cursor-pointer"
+                  className="px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-xl flex items-center gap-2 shadow-xs transition-colors cursor-pointer"
                 >
                   <ArrowUpDown className="w-3.5 h-3.5" />
                   Sort:{" "}
-                  {sortOrder === "highest" ? "Highest Match" : "Lowest Match"}
+                  {sortOrder === "highest" ? "Highest Score" : "Lowest Score"}
                 </button>
               </div>
             </div>
 
-            {/* Section 1: Top Recommended Pairs */}
-            <div>
-              <h3 className="text-base font-extrabold text-slate-900 mb-4">
-                Top Recommended Pair
-              </h3>
-
-              {loading ? (
-                <div className="bg-white p-12 rounded-xl border border-slate-200 text-center font-bold text-slate-400">
-                  Syncing AI property matches...
-                </div>
-              ) : sortedPairs.length === 0 ? (
-                <div className="bg-white p-12 rounded-xl border border-slate-200 text-center font-semibold text-slate-500">
-                  No dynamic property matches found for current database leads.
-                </div>
-              ) : (
-                (() => {
-                  const pair = sortedPairs[0];
-                  return (
-                    <div
-                      key={pair.id}
-                      className={`w-full bg-white rounded-xl border ${
-                        pair.matchScore >= 90
-                          ? "border-emerald-500/40"
-                          : "border-slate-200"
-                      } p-6 shadow-xs relative flex flex-col md:flex-row justify-between gap-6 items-stretch`}
-                    >
-                      {/* Match Score Badge (Centered overlay on desktop view) */}
-                      <div className="hidden md:flex absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-emerald-50 border border-emerald-500/30 text-emerald-700 rounded-xl px-3 py-2 text-center shadow-sm z-10">
-                        <div>
-                          <span className="text-lg font-black leading-none block">
-                            {pair.matchScore ?? pair.match_score ?? 85}%
-                          </span>
-                          <span className="text-[9px] font-black uppercase tracking-wider block text-emerald-600 mt-0.5">
-                            Match
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* LEFT SIDE: Property Details */}
-                      <div className="flex-1 flex flex-col justify-between md:pr-8 md:border-r border-slate-100">
-                        <div>
-                          <div className="flex items-center justify-between mb-3">
-                            <span className="px-2.5 py-1 bg-slate-900 text-white text-[10px] font-black rounded uppercase tracking-wider">
-                              {pair.property?.tag || "Featured Property"}
-                            </span>
-                            <span className="text-xs font-black text-emerald-700">
-                              {pair.property?.price || "Contact Agent"}
-                            </span>
-                          </div>
-
-                          <div className="relative rounded-lg overflow-hidden mb-4 group h-48 w-full">
-                            <img
-                              src={
-                                pair.property?.image ||
-                                "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?w=600&auto=format&fit=crop"
-                              }
-                              alt={pair.property?.title || "Property Listing"}
-                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                            />
-                          </div>
-
-                          <h4 className="font-extrabold text-slate-900 text-base leading-tight">
-                            {pair.property?.title || "Database Property"}
-                          </h4>
-
-                          <div className="flex items-center gap-4 text-xs text-slate-500 mt-3 font-semibold">
-                            <span className="flex items-center gap-1.5">
-                              <Bed className="w-4 h-4 text-slate-400" />{" "}
-                              {pair.property?.beds ?? 0} Beds
-                            </span>
-                            <span className="flex items-center gap-1.5">
-                              <Bath className="w-4 h-4 text-slate-400" />{" "}
-                              {pair.property?.baths ?? 0} Baths
-                            </span>
-                            <span className="flex items-center gap-1.5">
-                              <Maximize2 className="w-3.5 h-3.5 text-slate-400" />{" "}
-                              {pair.property?.sqft
-                                ? pair.property.sqft.toLocaleString()
-                                : "N/A"}{" "}
-                              Sqft
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* RIGHT SIDE: Matched Database Lead Details */}
-                      <div className="flex-1 flex flex-col justify-between md:pl-8">
-                        <div>
-                          <div className="flex items-center justify-between mb-3">
-                            <span
-                              className={`inline-block px-2.5 py-0.5 border text-[10px] font-black rounded tracking-wider uppercase ${
-                                pair.lead?.status === "HOT LEAD" ||
-                                pair.lead?.status === "NEW" ||
-                                pair.lead?.status === "HOT"
-                                  ? "bg-rose-50 text-rose-600 border-rose-100"
-                                  : "bg-emerald-50 text-emerald-700 border-emerald-100"
-                              }`}
-                            >
-                              Matched Lead • {pair.lead?.status || "NEW"}
-                            </span>
-
-                            {/* Mobile Match Badge */}
-                            <span className="md:hidden text-xs font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded border border-emerald-200">
-                              {pair.matchScore ?? pair.match_score ?? 85}% Match
-                            </span>
-                          </div>
-
-                          <div className="flex items-start gap-3 mt-2">
-                            <div className="w-11 h-11 rounded-full bg-slate-100 font-extrabold text-slate-700 flex items-center justify-center text-sm shrink-0">
-                              {pair.lead?.initials ||
-                                (pair.lead?.name
-                                  ? pair.lead.name.slice(0, 2).toUpperCase()
-                                  : "LD")}
-                            </div>
-                            <div>
-                              <h4 className="font-extrabold text-slate-900 text-base leading-tight">
-                                {pair.lead?.name ||
-                                  pair.lead?.phone ||
-                                  "Database Lead"}
-                              </h4>
-                              <p className="text-xs font-medium text-slate-400 mt-0.5">
-                                {pair.lead?.phone
-                                  ? `${pair.lead.phone} • `
-                                  : ""}
-                                {pair.lead?.source || "WhatsApp Bot"}
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="mt-6 space-y-3 text-xs bg-slate-50 p-4 rounded-xl border border-slate-100">
-                            <div className="flex justify-between items-center">
-                              <span className="text-slate-500 font-medium">
-                                Intent
-                              </span>
-                              <span className="font-extrabold text-slate-800">
-                                {pair.lead?.intent || "Buying / Inquiring"}
-                              </span>
-                            </div>
-                            <div className="flex justify-between items-center">
-                              <span className="text-slate-500 font-medium">
-                                Budget
-                              </span>
-                              <span className="font-black text-slate-900 text-sm">
-                                {pair.lead?.budget || "Unspecified"}
-                              </span>
-                            </div>
-                            <div className="flex justify-between items-center">
-                              <span className="text-slate-500 font-medium">
-                                Property Type
-                              </span>
-                              <span className="font-extrabold text-slate-800">
-                                {pair.lead?.type ||
-                                  pair.lead?.property_type ||
-                                  pair.lead?.propertyType ||
-                                  "Any"}
-                              </span>
-                            </div>
-                            <div className="flex justify-between items-center">
-                              <span className="text-slate-500 font-medium">
-                                Location
-                              </span>
-                              <span className="font-extrabold text-slate-800">
-                                {pair.lead?.location || "Not Specified"}
-                              </span>
-                            </div>
-                            <div className="flex justify-between items-center">
-                              <span className="text-slate-500 font-medium">
-                                Captured At
-                              </span>
-                              <span className="font-medium text-slate-600">
-                                {pair.lead?.lastActive ||
-                                  pair.lead?.created_at ||
-                                  pair.lead?.added_time ||
-                                  "Recently"}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <button
-                          onClick={() => handleSendProposal(pair)}
-                          disabled={sendingProposalId === pair.id}
-                          className="w-full sm:w-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-xl transition-all duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {sendingProposalId === pair.id ? (
-                            <>
-                              <span className="animate-spin border-2 border-white border-t-transparent rounded-full w-4 h-4"></span>
-                              Sending via WhatsApp...
-                            </>
-                          ) : (
-                            <>
-                              {/* <Send className="w-4 h-4" /> */}
-                              Send Proposal to Lead
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })()
-              )}
-            </div>
-
-            {/* Section 2: Highly Demanded Listings */}
-            <div>
-              <div className="mb-4">
-                <h3 className="text-base font-extrabold text-slate-900 leading-tight">
-                  Highly Demanded Listings
+            {/* Highly Demanded Listings Quick Row */}
+            {demandedListings.length > 0 && (
+              <div className="space-y-3">
+                <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-400">
+                  Trending Inventory Surges
                 </h3>
-                <p className="text-xs font-medium text-slate-500 mt-0.5">
-                  Properties most requested in bot conversations this week.
-                </p>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {demandedListings.map((item) => (
-                  <div
-                    key={item.id}
-                    className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs hover:shadow-md transition-shadow"
-                  >
-                    <div className="relative h-44 overflow-hidden group">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {demandedListings.map((item) => (
+                    <div
+                      key={item.id}
+                      className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center gap-4"
+                    >
                       <img
                         src={item.image}
                         alt={item.title}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        className="w-16 h-16 rounded-lg object-cover shrink-0"
                       />
-                      {item.tag === "High Demand" && (
-                        <span className="absolute top-3 left-3 px-2.5 py-1 bg-rose-50 text-rose-600 border border-rose-200/60 text-[10px] font-black rounded flex items-center gap-1 backdrop-blur-xs">
-                          <Flame className="w-3 h-3" /> High Demand
+                      <div className="min-w-0 flex-1">
+                        <span className="inline-block px-2 py-0.5 rounded text-[9px] font-black tracking-wider uppercase bg-emerald-50 text-emerald-700 mb-1">
+                          {item.tag}
                         </span>
-                      )}
-                      {item.tag === "Trending" && (
-                        <span className="absolute top-3 left-3 px-2.5 py-1 bg-blue-50 text-blue-600 border border-blue-200/60 text-[10px] font-black rounded flex items-center gap-1 backdrop-blur-xs">
-                          <Star className="w-3 h-3 fill-blue-600" /> Trending
-                        </span>
-                      )}
+                        <h4 className="font-extrabold text-slate-900 text-xs truncate">
+                          {item.title}
+                        </h4>
+                        <p className="text-[11px] font-semibold text-slate-500 mt-0.5">
+                          {item.statText}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Matching Pairs List */}
+            <div className="space-y-4">
+              <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-400">
+                AI Lead-to-Property Match Pairs ({sortedPairs.length})
+              </h3>
+
+              {loading ? (
+                <div className="bg-white p-12 rounded-xl border border-slate-200 text-center text-slate-500 font-medium">
+                  <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-slate-900" />
+                  Curating smart property matches...
+                </div>
+              ) : sortedPairs.length === 0 ? (
+                <div className="bg-white p-12 rounded-xl border border-slate-200 text-center text-slate-500 font-medium">
+                  No high-confidence property matches found at the moment. Keep
+                  chatting with leads!
+                </div>
+              ) : (
+                sortedPairs.map((match) => (
+                  <div
+                    key={match.id}
+                    className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs hover:border-slate-300 transition-all grid grid-cols-1 lg:grid-cols-12 gap-6 items-center"
+                  >
+                    {/* Lead Info (col-span-4) */}
+                    <div className="lg:col-span-4 space-y-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-slate-900 text-white font-extrabold flex items-center justify-center text-xs tracking-wider shrink-0">
+                          {match.lead.initials}
+                        </div>
+                        <div className="min-w-0">
+                          <h4 className="font-extrabold text-slate-900 text-sm truncate">
+                            {match.lead.name}
+                          </h4>
+                          <p className="text-xs font-semibold text-slate-500 truncate">
+                            {match.lead.phone} • {match.lead.source}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 text-xs bg-slate-50 p-3 rounded-xl border border-slate-100">
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-400 block uppercase">
+                            Intent
+                          </span>
+                          <span className="font-extrabold text-slate-900">
+                            {match.lead.intent}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-400 block uppercase">
+                            Budget
+                          </span>
+                          <span className="font-extrabold text-slate-900 truncate block">
+                            {match.lead.budget}
+                          </span>
+                        </div>
+                        <div className="col-span-2 pt-1 border-t border-slate-200/60 mt-1">
+                          <span className="text-[10px] font-bold text-slate-400 block uppercase">
+                            Target Type & Location
+                          </span>
+                          <span className="font-semibold text-slate-700">
+                            {match.lead.type} in {match.lead.location}
+                          </span>
+                        </div>
+                      </div>
                     </div>
 
-                    <div className="p-4">
-                      <h4 className="font-extrabold text-slate-900 text-base leading-tight">
-                        {item.title}
-                      </h4>
-                      <p className="text-xs text-slate-500 font-bold mt-1">
-                        {item.price}
-                      </p>
+                    {/* Match Score Badge (col-span-2 text-center) */}
+                    <div className="lg:col-span-2 flex flex-col items-center justify-center py-3 bg-emerald-50/50 border border-emerald-100 rounded-xl">
+                      <Flame className="w-5 h-5 text-emerald-600 mb-1" />
+                      <span className="text-2xl font-black text-emerald-700 tracking-tight">
+                        {match.matchScore}%
+                      </span>
+                      <span className="text-[10px] font-extrabold text-emerald-800 uppercase tracking-wider">
+                        Confidence
+                      </span>
+                    </div>
 
-                      <div className="mt-4 pt-3 border-t border-slate-100 flex items-center gap-1.5 text-emerald-600 text-xs font-bold">
-                        <TrendingUp className="w-3.5 h-3.5" />
-                        <span>{item.statText}</span>
+                    {/* Matched Property Card (col-span-6) */}
+                    <div className="lg:col-span-6 flex flex-col sm:flex-row items-center gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200/80">
+                      <img
+                        src={match.property.image}
+                        alt={match.property.title}
+                        className="w-full sm:w-28 h-28 rounded-lg object-cover shrink-0"
+                      />
+                      <div className="flex-1 min-w-0 w-full space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className="px-2 py-0.5 rounded text-[9px] font-black tracking-wider uppercase bg-slate-200 text-slate-800">
+                            {match.property.tag}
+                          </span>
+                          <span className="text-xs font-black text-slate-900">
+                            {match.property.price}
+                          </span>
+                        </div>
+                        <h4 className="font-extrabold text-slate-900 text-sm truncate">
+                          {match.property.title}
+                        </h4>
+                        <div className="flex items-center gap-3 text-xs text-slate-500 font-semibold pt-1">
+                          {match.property.beds > 0 && (
+                            <span className="flex items-center gap-1">
+                              <Bed className="w-3.5 h-3.5" />{" "}
+                              {match.property.beds} Beds
+                            </span>
+                          )}
+                          {match.property.baths > 0 && (
+                            <span className="flex items-center gap-1">
+                              <Bath className="w-3.5 h-3.5" />{" "}
+                              {match.property.baths} Baths
+                            </span>
+                          )}
+                          {match.property.sqft > 0 && (
+                            <span className="flex items-center gap-1">
+                              <Maximize2 className="w-3.5 h-3.5" />{" "}
+                              {match.property.sqft} sqft
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="pt-2 flex items-center justify-end gap-2">
+                          <button
+                            onClick={() => handleSendProposal(match)}
+                            disabled={sendingProposalId === match.id}
+                            className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2 px-4 rounded-lg flex items-center justify-center gap-2 transition-all shadow-xs cursor-pointer disabled:opacity-50"
+                          >
+                            {sendingProposalId === match.id ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                Dispatching...
+                              </>
+                            ) : (
+                              <>
+                                <Send className="w-3.5 h-3.5" />
+                                Send WhatsApp Proposal
+                              </>
+                            )}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
-                ))}
-              </div>
+                ))
+              )}
             </div>
           </main>
         )}
