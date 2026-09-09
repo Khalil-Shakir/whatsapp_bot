@@ -11,12 +11,11 @@ from pydantic import BaseModel
 from datetime import datetime
 import json, asyncio, qrcode, io, base64, time
 from neonize.client import NewClient
-from neonize.events import ConnectedEv, DisconnectedEv, MessageEv
+from neonize.events import ConnectedEv, DisconnectedEv, MessageEv, LoggedOutEv
 from contextlib import asynccontextmanager
 from typing import Dict, Any, List
 from groq import Groq
 from fastapi import HTTPException
-
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bot_manager")
@@ -26,9 +25,15 @@ DB_PATH = os.path.join(BASE_DIR, "leads.db")
 UPLOAD_DIR = os.path.join(BASE_DIR, "static", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# client = NewClient("db/whatsapp.sqlite3")
-
 client = NewClient("auth_info.db")
+
+# Helper function to trigger client re-connection in executor thread
+def reconnect_client():
+    try:
+        logger.info("Attempting automatic re-connection to trigger QR generation...")
+        client.connect()
+    except Exception as e:
+        logger.error(f"Error during client reconnection: {e}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -37,18 +42,24 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Malik Property Automation API", lifespan=lifespan)
 
-
 class UpdateStatusPayload(BaseModel):
     status: str
 
 class ToggleBotPayload(BaseModel):
     enabled: bool
+
 class UpdateInventoryStatusPayload(BaseModel):
     status: str
+class UpdateAreaPayload(BaseModel):
+    area: str
+
+def get_db_connection():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 @app.patch("/api/leads/{lead_id}/status")
 async def update_lead_status(lead_id: int, payload: UpdateStatusPayload):
-    # Standardize incoming status string
     valid_statuses = ["NEW", "FOLLOW UP", "CLOSED"]
     new_status = payload.status.upper()
     
@@ -66,7 +77,6 @@ async def update_lead_status(lead_id: int, payload: UpdateStatusPayload):
         
     conn.close()
 
-    # Broadcast real-time update via WebSocket state manager
     await state_manager.add_activity({
         "type": "action",
         "text": f"Lead #{lead_id} status updated to",
@@ -75,6 +85,28 @@ async def update_lead_status(lead_id: int, payload: UpdateStatusPayload):
     })
 
     return {"status": "success", "lead_id": lead_id, "new_status": new_status}
+
+@app.patch("/api/leads/{lead_id}/area")
+async def update_lead_area(lead_id: int, payload: UpdateAreaPayload):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE leads SET area = ? WHERE id = ?", (payload.area, lead_id))
+    conn.commit()
+
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    conn.close()
+
+    await state_manager.add_activity({
+        "type": "action",
+        "text": f"Lead #{lead_id} required area updated to",
+        "highlightText": payload.area,
+        "time": "JUST NOW"
+    })
+
+    return {"status": "success", "lead_id": lead_id, "new_area": payload.area}
 
 @app.patch("/api/leads/{lead_id}/toggle-bot")
 async def toggle_lead_bot(lead_id: int, payload: ToggleBotPayload):
@@ -98,7 +130,7 @@ async def toggle_lead_bot(lead_id: int, payload: ToggleBotPayload):
 
     return {"status": "success", "lead_id": lead_id, "bot_enabled": payload.enabled}
 
-@app.patch("api/inventory/{item_id}/status")
+@app.patch("/api/inventory/{item_id}/status")
 async def updateInventoryItemStatus(item_id: int, payload: UpdateInventoryStatusPayload):
     valid_statuses = ["AVAILABLE", "PENDING", "SOLD"]
     new_status = payload.status.upper()
@@ -121,7 +153,7 @@ async def updateInventoryItemStatus(item_id: int, payload: UpdateInventoryStatus
         "text" : f"Property listing #{item_id} status updated to ",
         "highlightText": new_status,
         "time": "JUST NOW"
-        })
+    })
     return {"status": "success", "item_id": item_id, "new_status": new_status}
 
 app.add_middleware(
@@ -167,13 +199,10 @@ class BotStateManager:
             except Exception as e:
                 logger.info(f"Error broadcasting to client: {e}")
 
-
     async def add_activity(self, activity: dict):
-    # Ensure ID exists
         if "id" not in activity or not activity["id"]:
             activity["id"] = f"act-{time.time_ns()}"
 
-        # Deduplicate against existing activities in memory
         is_duplicate = any(
             a.get("id") == activity.get("id") or 
             (a.get("text") == activity.get("text") and a.get("targetText") == activity.get("targetText"))
@@ -187,7 +216,6 @@ class BotStateManager:
         if len(self.recent_activities) > 20:
             self.recent_activities.pop()
 
-        # Send ONLY the new activity payload to avoid triggering fallback handlers
         payload = {
             "type": "NEW_ACTIVITY",
             "activity": activity
@@ -200,7 +228,6 @@ class BotStateManager:
         payload = self.get_state_payload()
         await self.broadcast(payload)
 
-
 state_manager = BotStateManager()
 
 try:
@@ -208,11 +235,6 @@ try:
 except RuntimeError:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-
-def get_db_connection():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
 
 @client.qr
 def on_qr(client_instance, qr_bytes: bytes):
@@ -237,30 +259,22 @@ def on_connected(client_instance, event: ConnectedEv):
 
 @client.event(DisconnectedEv)
 def on_disconnected(client_instance, event: DisconnectedEv):
-    logger.warning("WhatsApp bot disconnected!")
+    logger.warning("WhatsApp bot disconnected! Triggering automatic reconnect...")
     asyncio.run_coroutine_threadsafe(
         state_manager.update_status("DISCONNECTED", None),
         loop
     )
+    # Automatically schedule a reconnection attempt to generate a new QR code
+    loop.run_in_executor(None, reconnect_client)
 
-@client.event(MessageEv)
-def on_message(client_instance, message: MessageEv):
-    sender = message.Info.Sender.User
-    text_content = message.Message.conversation or message.Message.extendedTextMessage.text or "[Media/Other]"
-
-    activity = {
-        "id": str(message.Info.ID),
-        "type": "bot",
-        "text": "Message received from",
-        "highlightText": sender,
-        "targetText": f'"{text_content}"',
-        "time": "JUST NOW"
-    }
-
+@client.event(LoggedOutEv)
+def on_logged_out(client_instance, event: LoggedOutEv):
+    logger.warning("WhatsApp logged out from mobile! Triggering fresh session reconnect...")
     asyncio.run_coroutine_threadsafe(
-        state_manager.add_activity(activity),
+        state_manager.update_status("DISCONNECTED", None),
         loop
     )
+    loop.run_in_executor(None, reconnect_client)
 
 @app.websocket("/ws/bot-status")
 async def websocket_endpoint(websocket: WebSocket):
@@ -270,7 +284,6 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         state_manager.disconnect_ws(websocket)
-
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -769,6 +782,8 @@ async def get_leads():
                     "intent": (r["intent"] or "AWAITING INFO").upper(),
                     "propertyType": r["property_type"] or "N/A",
                     "budget": budget,
+                    "area": r["area"] if "area" in keys and r["area"] else "N/A",
+                    "location": r["location"] if "location" in keys and r["location"] else "N/A",
                     "status": (r["status"] or "NEW").upper(),
                     "botEnabled": bool(r["bot_enabled"]) if "bot_enabled" in keys and r["bot_enabled"] is not None else True,
                     "addedTime": added_time,
@@ -843,6 +858,8 @@ def update_lead(
     property_type: str = None,
     budget_min: float = None,
     budget_max: float = None,
+    area: str = None,
+    location: str = None,
     status: str = None,
 ):
     conn = sqlite3.connect("leads.db")
@@ -856,11 +873,13 @@ def update_lead(
             property_type = COALESCE(?, property_type),
             budget_min = COALESCE(?, budget_min),
             budget_max = COALESCE(?, budget_max),
+            area = COALESCE(?, area),
+            location = COALESCE(?, location),
             status = COALESCE(?, status),
             last_interaction = CURRENT_TIMESTAMP
         WHERE id = ?
         """,
-        (name, intent, property_type, budget_min, budget_max, status, lead_id),
+        (name, intent, property_type, budget_min, budget_max, area, location, status, lead_id),
     )
     conn.commit()
     conn.close()
@@ -940,6 +959,8 @@ def on_message(client: NewClient, message: MessageEv):
         - property_type: Commercial, Residential, Plot, House, Agriculture.
         - budget_min: Minimum budget numeric value (in PKR, handle "lakh" / "crore" conversions if applicable).
         - budget_max: Maximum budget numeric value (in PKR, handle "lakh" / "crore" conversions if applicable).
+        - area: "Extract area/size (e.g. '10 Marla', '5 Marla', '2 kanal')
+        "location": Extract the location where the lead is interested (e.g 'Mianwali', 'DHA Phase 6 mianwali', 'Lahore sadar bazar')
         - status: Set to "NEW", "FOLLOW UP", or "CLOSED".
 
         3. Conversational & Language Rules:
@@ -957,6 +978,8 @@ def on_message(client: NewClient, message: MessageEv):
         "property_type": "Plot/House/Commercial/etc or null",
         "budget_min": float number or null,
         "budget_max": float number or null,
+        "area": "Extract area/size (e.g. '10 Marla', '5 Marla', '2 kanal')"
+        "location": Extract the location where the lead is interested (e.g 'Mianwali', 'DHA Phase 6 mianwali', 'Lahore sadar bazar')
         "status": "NEW | FOLLOW UP | CLOSED | null"
         }}
         """
@@ -994,6 +1017,8 @@ def on_message(client: NewClient, message: MessageEv):
             property_type=data.get("property_type"),
             budget_min=data.get("budget_min"),
             budget_max=data.get("budget_max"),
+            area=data.get("area"),
+            location=data.get("location"),
             status=data.get("status"),
         )
 

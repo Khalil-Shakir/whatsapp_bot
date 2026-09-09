@@ -86,6 +86,8 @@ interface Lead {
   propertyType: string;
   budget: string;
   status: "NEW" | "FOLLOW UP" | "CLOSED";
+  area?: string;
+  location?: string;
   botEnabled?: boolean;
   addedTime: string;
 }
@@ -429,6 +431,54 @@ export default function MalikPropertyDashboard() {
   //     if (ws) ws.close();
   //   };
   // }, []);
+
+  useEffect(() => {
+    let ws: WebSocket | null = null;
+    let reconnectTimer: NodeJS.Timeout;
+
+    const connectWS = () => {
+      ws = new WebSocket("ws://127.0.0.1:8000/ws/bot-status");
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === "STATE_UPDATE") {
+            setBotStatus(data.status);
+            setQrCode(data.qr_code);
+            if (Array.isArray(data.activities)) {
+              setActivities(data.activities);
+            }
+          } else if (data.type === "NEW_ACTIVITY" && data.activity) {
+            setActivities((prev) => {
+              // Prevent duplicate insertion on the client side
+              const exists = prev.some(
+                (item) =>
+                  item.id === data.activity.id ||
+                  (item.text === data.activity.text &&
+                    item.highlightText === data.activity.highlightText &&
+                    item.targetText === data.activity.targetText),
+              );
+              if (exists) return prev;
+              return [data.activity, ...prev].slice(0, 20);
+            });
+          }
+        } catch (err) {
+          console.error("Error parsing WS status payload:", err);
+        }
+      };
+
+      ws.onclose = () => {
+        reconnectTimer = setTimeout(connectWS, 3000);
+      };
+    };
+
+    connectWS();
+
+    return () => {
+      clearTimeout(reconnectTimer);
+      if (ws) ws.close();
+    };
+  }, []);
 
   // useEffect(() => {
   //   const ws = new WebSocket("ws://127.0.0.1:8000/ws/bot-status");
@@ -1475,15 +1525,9 @@ export default function MalikPropertyDashboard() {
             </div>
 
             {/* Leads List Table */}
-            <div className="space-y-3 pt-2">
-              <div className="grid grid-cols-12 px-6 text-[11px] font-extrabold text-slate-400 uppercase tracking-wider">
-                <div className="col-span-4">Contact</div>
-                <div className="col-span-3">Intent & Type</div>
-                <div className="col-span-2">Budget</div>
-                <div className="col-span-2">Status</div>
-                <div className="col-span-1 text-right">Actions</div>
-              </div>
-              <div className="relative flex-1">
+            <div className="space-y-4 pt-2">
+              {/* Search Bar */}
+              <div className="relative w-full">
                 <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
                   type="text"
@@ -1493,7 +1537,7 @@ export default function MalikPropertyDashboard() {
                     setSearchQuery(e.target.value);
                     setSearchTerm(e.target.value);
                   }}
-                  className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-slate-900/10 text-slate-900 placeholder:text-slate-400"
+                  className="w-full pl-9 pr-10 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-slate-900/10 text-slate-900 placeholder:text-slate-400"
                 />
                 {searchQuery && (
                   <button
@@ -1507,6 +1551,17 @@ export default function MalikPropertyDashboard() {
                   </button>
                 )}
               </div>
+
+              {/* Table Header (Standardized 12-column Grid) */}
+              <div className="grid grid-cols-12 px-6 text-[11px] font-extrabold text-slate-400 uppercase tracking-wider">
+                <div className="col-span-3">Contact</div>
+                <div className="col-span-2">Intent & Type</div>
+                <div className="col-span-2">Budget</div>
+                <div className="col-span-2">Area/Location</div>
+                <div className="col-span-2">Status</div>
+                <div className="col-span-1 text-right">Actions</div>
+              </div>
+
               {/* Loading state skeleton */}
               {loading ? (
                 <div className="bg-white p-8 rounded-xl border border-slate-200 text-center font-medium text-slate-500">
@@ -1527,31 +1582,31 @@ export default function MalikPropertyDashboard() {
                   )}
                 </div>
               ) : (
-                /* Real Dynamic Leads Row Mapping */
+                /* Real Dynamic Leads Row Mapping (Standardized 12-column Grid) */
                 filteredLeads.slice(0, visibleCount).map((lead) => (
                   <div
                     key={lead.id}
                     className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs hover:border-slate-300 transition-all grid grid-cols-12 items-center"
                   >
-                    {/* Contact Column */}
-                    <div className="col-span-4 flex items-center gap-3">
+                    {/* Contact Column (col-span-3) */}
+                    <div className="col-span-3 flex items-center gap-3">
                       <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center text-slate-600 shrink-0">
                         <User className="w-5 h-5 text-slate-500" />
                       </div>
-                      <div>
-                        <h4 className="font-extrabold text-slate-900 text-sm leading-tight">
+                      <div className="min-w-0">
+                        <h4 className="font-extrabold text-slate-900 text-sm leading-tight truncate">
                           {lead.name}
                         </h4>
-                        <p className="text-xs font-semibold text-slate-500 mt-0.5">
+                        <p className="text-xs font-semibold text-slate-500 mt-0.5 truncate">
                           {lead.phone}
                         </p>
                       </div>
                     </div>
 
-                    {/* Intent & Type Column */}
-                    <div className="col-span-3">
+                    {/* Intent & Type Column (col-span-2) */}
+                    <div className="col-span-2">
                       <span
-                        className={`inline-block px-2 py-0.5 rounded text-[9px] font-black tracking-wide uppercase mb-1 ${
+                        className={`inline-block pr-1 py-0.5 rounded text-[9px] font-black tracking-wide uppercase mb-1 ${
                           lead.intent.includes("SELL")
                             ? "bg-emerald-100 text-emerald-800"
                             : "bg-slate-100 text-slate-800"
@@ -1559,19 +1614,33 @@ export default function MalikPropertyDashboard() {
                       >
                         {lead.intent}
                       </span>
-                      <p className="text-xs text-slate-900 font-bold">
+                      <p className="text-xs text-slate-900 font-bold truncate">
                         {lead.propertyType}
                       </p>
                     </div>
 
-                    {/* Budget Column */}
+                    {/* Budget Column (col-span-2) */}
                     <div className="col-span-2">
-                      <p className="text-xs font-black text-slate-900">
+                      <p className="text-xs font-black text-slate-900 truncate">
                         {lead.budget}
                       </p>
                     </div>
 
-                    {/* Status Column */}
+                    {/* Area/Location Column (col-span-2) */}
+                    <div className="col-span-2">
+                      <p className="text-xs font-black text-slate-900 truncate">
+                        {lead.area && lead.area.trim() !== ""
+                          ? lead.area
+                          : "Not Specified"}
+                      </p>
+                      <p className="text-xs font-medium text-slate-500 truncate">
+                        {lead.location && lead.location.trim() !== ""
+                          ? lead.location
+                          : "Not Specified"}
+                      </p>
+                    </div>
+
+                    {/* Status Column (col-span-2) */}
                     <div className="col-span-2">
                       <div className="relative inline-block">
                         <select
@@ -1598,7 +1667,8 @@ export default function MalikPropertyDashboard() {
                       </p>
                     </div>
 
-                    <div className="col-span-1 flex items-center justify-end gap-2">
+                    {/* Actions Column (col-span-1) */}
+                    <div className="col-span-1 flex items-center justify-end gap-1.5">
                       {/* WhatsApp Direct Action */}
                       <button
                         onClick={() => handleOpenWhatsApp(lead.phone)}
@@ -1629,8 +1699,6 @@ export default function MalikPropertyDashboard() {
                         )}
                       </button>
                     </div>
-
-                    <div className="col-span-1 text-right"></div>
                   </div>
                 ))
               )}

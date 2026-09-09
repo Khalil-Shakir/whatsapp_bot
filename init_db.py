@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS leads (
     name TEXT,
     intent TEXT CHECK(intent IN ('BUYING', 'SELLING', 'RENT', 'AWAITING INFO')),
     property_type TEXT,
+    area TEXT,
+    location TEXT,
     budget_min REAL,
     budget_max REAL,
     status TEXT DEFAULT 'NEW' CHECK(status IN ('NEW', 'FOLLOW UP',  'CLOSED')),
@@ -23,7 +25,7 @@ CREATE TABLE IF NOT EXISTS leads (
 );
 """)
 try:
-    cursor.execute("ALTER TABLE leads ADD COLUMN bot_enabled INTEGER DEFAULT 1")
+    cursor.execute("ALTER TABLE leads ADD COLUMN location TEXT DEFAULT '' ")
 except sqlite3.OperationalError:
     pass  # Column already exists
 
