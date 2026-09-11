@@ -1,7 +1,10 @@
-streamlit
-pandas
 python-dotenv
 groq
 neonize
 plotly
 reportlab
+fastapi
+uvicorn
+pydantic
+qrcode
+pillow
